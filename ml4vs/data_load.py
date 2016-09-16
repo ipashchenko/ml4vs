@@ -54,12 +54,12 @@ def load_data(fnames, names, names_to_delete):
     # List of feature names
     features_names = list(dfs[0])
     # Count number of NaN for each feature
-    # for i, df in enumerate(dfs):
-        # print("File {}".format(i))
-        # for feature in features_names:
-        #     print("Feature {} has {} NaNs".format(feature,
-        #                                           df[feature].isnull().sum()))
-        # print("=======================")
+    for i, df in enumerate(dfs):
+        print("File {}".format(i))
+        for feature in features_names:
+            print("Feature {} has {} NaNs".format(feature,
+                                                  df[feature].isnull().sum()))
+        print("=======================")
 
     # Convert to numpy arrays
     # Features
@@ -71,27 +71,47 @@ def load_data(fnames, names, names_to_delete):
     y = np.zeros(len(X))
     y[len(dfs[0]):] = np.ones(len(X) - len(dfs[0]))
 
-    return X, y, features_names
+    return X, y, features_names, delta
 
 
-if __name__ == '__main__':
-    import os
-    import glob
-    data_dir = '/home/ilya/code/mllc/data/dataset_OGLE/indexes_normalized'
+def load_data_tgt(fname, names, names_to_delete, delta):
+    """
+    Function that loads target data for classification.
 
-    fnames = glob.glob(os.path.join(data_dir, '*.log'))[::-1]
-    n_cv_iter = 5
-    names = ['Magnitude', 'clipped_sigma', 'meaningless_1', 'meaningless_2',
-             'star_ID', 'weighted_sigma', 'skew', 'kurt', 'I', 'J', 'K', 'L',
-             'Npts', 'MAD', 'lag1', 'RoMS', 'rCh2', 'Isgn', 'Vp2p', 'Jclp',
-             'Lclp',
-             'Jtim', 'Ltim', 'CSSD', 'Ex', 'inv_eta', 'E_A', 'S_B', 'NXS',
-             'IQR']
+    :param fname:
+        Target data file.
+    :param names:
+        Names of columns in files.
+    :param names_to_delete:
+        Column names to delete.
+    :return:
+        X, ``sklearn`` array of features, list of feature names
+    """
+    # Load data
+    df = pd.read_table(fname, names=names, engine='python', na_values='+inf',
+                       sep=r"\s*", usecols=range(30))
 
-    names_to_delete = ['Magnitude', 'meaningless_1', 'meaningless_2', 'star_ID',
-                       'Npts']
+    for name in names_to_delete:
+        del df[name]
+    try:
+        shift_log_transform(df, 'CSSD', -delta + 0.1)
+    except KeyError:
+        pass
 
-    X, y, feature_names = load_data(fnames, names, names_to_delete)
-    import pickle
-    with open('X_y_feat_names.pkl', 'wb') as fo:
-        pickle.dump((X, y, feature_names), fo)
+    # List of feature names
+    features_names = list(df)
+    # Count number of NaN for each feature
+    for feature in features_names:
+        print("Feature {} has {} NaNs".format(feature,
+                                              df[feature].isnull().sum()))
+    print("=======================")
+
+    # Convert to numpy arrays
+    # Features
+    X = np.array(df[list(features_names)].values, dtype=float)
+
+    # Original data
+    df = pd.read_table(fname, names=names, engine='python', na_values='+inf',
+                       sep=r"\s*", usecols=range(30))
+
+    return X, features_names, df
