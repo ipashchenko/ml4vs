@@ -1,0 +1,54 @@
+"""
+Plotting a diagonal correlation matrix
+======================================
+
+_thumb: .3, .6
+"""
+from string import letters
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+sns.set(style="white")
+
+# Generate a large random dataset
+rs = np.random.RandomState(33)
+d = pd.DataFrame(data=rs.normal(size=(100, 26)),
+                 columns=list(letters[:26]))
+
+# Compute the correlation matrix
+corr = d.corr()
+
+# Generate a mask for the upper triangle
+mask = np.zeros_like(corr, dtype=np.bool)
+mask[np.triu_indices_from(mask)] = True
+
+# Set up the matplotlib figure
+f, ax = plt.subplots(figsize=(11, 9))
+
+# Generate a custom diverging colormap
+cmap = sns.diverging_palette(220, 10, as_cmap=True)
+
+# Draw the heatmap with the mask and correct aspect ratio
+sns.heatmap(corr, mask=mask, cmap=cmap, vmax=.3,
+            square=True, xticklabels=5, yticklabels=5,
+            linewidths=.5, cbar_kws={"shrink": .5}, ax=ax)
+
+
+def plot_corr(df, size=10):
+    """Function plots a graphical correlation matrix for each pair of columns in
+    the dataframe.
+
+    Input:
+        df: pandas DataFrame
+        size: vertical and horizontal size of the plot
+    """
+
+    corr = df.corr()
+    fig, ax = plt.subplots(figsize=(size, size))
+    ax.matshow(corr)
+    plt.xticks(range(len(corr.columns)), corr.columns)
+    plt.yticks(range(len(corr.columns)), corr.columns)
+
+
