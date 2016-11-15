@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 import pandas as pd
 import numpy as np
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import roc_auc_score
-import xgboost as xgb
+from sklearn.tree import DecisionTreeClassifier
 from hyperopt import hp, fmin, tpe, STATUS_OK, Trials
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.pipeline import Pipeline
@@ -19,47 +20,6 @@ names_to_delete = ['Magnitude', 'meaningless_1', 'meaningless_2', 'star_ID']
 
 def shift_log_transform(df, name, shift):
     df[name] = np.log(df[name] + shift)
-
-
-def load_to_df(fnames, names, names_to_delete, target='variable'):
-    """
-    Function that loads data from series of files where first file contains
-    class of zeros and other files - classes of ones.
-
-    :param fnames:
-        Iterable of file names.
-    :param names:
-        Names of columns in files.
-    :param names_to_delete:
-        Column names to delete.
-    :return:
-        Pandas data frame.
-    """
-    # Load data
-    dfs = list()
-    for fn in fnames:
-        dfs.append(pd.read_table(fn, names=names, engine='python',
-                                 na_values='+inf', sep=r"\s*",
-                                 usecols=range(30)))
-    df = pd.concat(dfs)
-    y = np.zeros(len(df))
-    y[len(dfs[0]):] = np.ones(len(df) - len(dfs[0]))
-
-    df[target] = y
-
-    # Remove meaningless features
-    delta = min(df['CSSD'][np.isfinite(df['CSSD'].values)])
-    # print delta
-    print delta
-
-    for name in names_to_delete:
-        del df[name]
-    try:
-        shift_log_transform(df, 'CSSD', -delta + 0.1)
-    except KeyError:
-        pass
-
-    return df, delta
 
 
 def load_data(fnames, names, names_to_delete):
@@ -162,7 +122,7 @@ def load_data_tgt(fname, names, names_to_delete, delta):
 
     # Original data
     df_orig = pd.read_table(fname, names=names, engine='python', na_values='+inf',
-                            sep=r"\s*", usecols=range(30))
+                       sep=r"\s*", usecols=range(30))
 
     return X, features_names, df, df_orig
 
@@ -188,8 +148,7 @@ predictors = list(df)
 predictors.remove(target)
 dtrain = df
 
-# Was 7
-sss = StratifiedShuffleSplit(n_splits=1, test_size=0.25, random_state=77)
+sss = StratifiedShuffleSplit(n_splits=1, test_size=0.25, random_state=123)
 for train_indx, test_indx in sss.split(dtrain[predictors].index, dtrain['variable']):
     print train_indx, test_indx
     train = dtrain.iloc[train_indx]
@@ -197,42 +156,20 @@ for train_indx, test_indx in sss.split(dtrain[predictors].index, dtrain['variabl
 
 
 def objective(space):
-    clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=space['lr'],
-                            max_depth=space['max_depth'],
-                            min_child_weight=space['min_child_weight'],
-                            subsample=space['subsample'],
-                            colsample_bytree=space['colsample_bytree'],
-                            colsample_bylevel=space['colsample_bylevel'],
-                            gamma=space['gamma'],
-                            scale_pos_weight=space['scale_pos_weight'])
-
-    # Try using pipeline
+    clf = DecisionTreeClassifier(max_depth=space['max_depth'],
+                                 max_features=space['max_features'],
+                                 criterion=space['criterion'],
+                                 min_weight_fraction_leaf=space['mwfl'],
+                                 class_weight='balanced')
     estimators = list()
     estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                           axis=0, verbose=2)))
-    # estimators.append(('scaler', StandardScaler()))
     estimators.append(('clf', clf))
     pipeline = Pipeline(estimators)
 
-    valid_ = valid[predictors]
-    train_ = train[predictors]
-    for name, transform in pipeline.steps[:-1]:
-        transform.fit(train_)
-        valid_ = transform.transform(valid_)
-        train_ = transform.transform(train_)
-
-    eval_set = [(train_, train['variable']),
-                (valid_, valid['variable'])]
-
-    pipeline.fit(train[predictors], train['variable'],
-                 clf__eval_set=eval_set, clf__eval_metric="auc",
-                 clf__early_stopping_rounds=50)
-    # clf.fit(train[predictors], train['variable'],
-    #         eval_set=eval_set, eval_metric="auc",
-    #         early_stopping_rounds=30)
+    pipeline.fit(train[predictors], train['variable'])
 
     pred = pipeline.predict_proba(valid[predictors])[:, 1]
-    # pred = clf.predict_proba(valid[predictors])[:, 1]
     auc = roc_auc_score(valid['variable'], pred)
     print "SCORE:", auc
 
@@ -240,15 +177,10 @@ def objective(space):
 
 
 space ={
-    'max_depth': hp.choice("x_max_depth", np.arange(2, 20, 1, dtype=int)),
-    'min_child_weight': hp.quniform('x_min_child', 1, 20, 2),
-    'subsample': hp.uniform('x_subsample', 0.5, 1),
-    'colsample_bytree': hp.uniform('x_csbtree', 0.5, 1),
-    'colsample_bylevel': hp.uniform('x_csblevel', 0.5, 1),
-    'gamma': hp.uniform('x_gamma', 0.0, 1),
-    'scale_pos_weight': hp.choice('x_spweight', (0, 50, 150)),
-    'lr': hp.quniform('lr', 0.001, 0.5, 0.025)
-    # 'lr': hp.loguniform('lr', -7, -1)
+    'max_depth': hp.choice("max_depth", (1, 2, 3)),
+    'max_features': hp.choice("max_features", range(1, 25, 1)),
+    'criterion': hp.choice("criterion", ("gini", "entropy")),
+    'mwfl': hp.uniform("mwfl", 0, 0.1)
 }
 
 
@@ -256,30 +188,53 @@ trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=5000,
+            max_evals=1000,
             trials=trials)
 
 import hyperopt
 print hyperopt.space_eval(space, best)
-
 best_pars = hyperopt.space_eval(space, best)
-clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=best_pars['lr'],
-                        max_depth=best_pars['max_depth'],
-                        min_child_weight=best_pars['min_child_weight'],
-                        subsample=best_pars['subsample'],
-                        colsample_bytree=best_pars['colsample_bytree'],
-                        colsample_bylevel=best_pars['colsample_bylevel'],
-                        gamma=best_pars['gamma'],
-                        scale_pos_weight=best_pars['scale_pos_weight'])
 
+# Construct classifier with best parameters
+clf = DecisionTreeClassifier(max_depth=best_pars['max_depth'],
+                             max_features=best_pars['max_features'],
+                             criterion=best_pars['criterion'],
+                             min_weight_fraction_leaf=best_pars['mwfl'],
+                             class_weight='balanced')
+calibrated_clf = CalibratedClassifierCV(clf, method='sigmoid', cv=4)
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
-estimators.append(('clf', clf))
+estimators.append(('clf', calibrated_clf))
 pipeline = Pipeline(estimators)
 
 # Fit classifier with best hyperparameters on whole data set
 pipeline.fit(dtrain[predictors], dtrain['variable'])
+
+# Fit using uncalibrated classifier to plot tree
+clf_ = DecisionTreeClassifier(max_depth=best_pars['max_depth'],
+                              max_features=best_pars['max_features'],
+                              criterion=best_pars['criterion'],
+                              min_weight_fraction_leaf=best_pars['mwfl'],
+                              class_weight='balanced')
+estimators_ = list()
+estimators_.append(('imputer', Imputer(missing_values='NaN', strategy='median',
+                                       axis=0, verbose=2)))
+estimators_.append(('clf', clf_))
+pipeline_ = Pipeline(estimators_)
+
+# Fit classifier with best hyperparameters on whole data set
+pipeline_.fit(dtrain[predictors], dtrain['variable'])
+
+from sklearn import tree
+import pydotplus
+dot_data = tree.export_graphviz(clf_, out_file=None,
+                                feature_names=predictors,
+                                class_names=["0", "1"],
+                                filled=True, rounded=True,
+                                special_characters=True)
+graph = pydotplus.graph_from_dot_data(dot_data)
+graph.write_pdf("tree_31.pdf")
 
 # Load blind test data
 file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics_normalized.log'
@@ -288,58 +243,14 @@ X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_dele
                                                   delta)
 
 y_probs = pipeline.predict_proba(df[predictors])[:, 1]
-idx = y_probs > 0.25
-idx_ = y_probs < 0.25
-gb_no = list(df_orig['star_ID'][idx_])
+idx = y_probs > 0.3
+idx_ = y_probs < 0.3
+dtree_no = list(df_orig['star_ID'][idx_])
 print("Found {} variables".format(np.count_nonzero(idx)))
 
-with open('gb_results.txt', 'w') as fo:
-    for line in list(df_orig['star_ID'][idx]):
-        fo.write(line + '\n')
+# with open('dtree_results.txt', 'w') as fo:
+#     for line in list(df_orig['star_ID'][idx]):
+#         fo.write(line + '\n')
 
-# Check F1
-with open('clean_list_of_new_variables.txt', 'r') as fo:
-    news = fo.readlines()
-news = [line.strip().split(' ')[1] for line in news]
-news = set(news)
 
-with open('gb_results.txt', 'r') as fo:
-    gb = fo.readlines()
-gb = [line.strip().split('_')[4].split('.')[0] for line in gb]
-gb = set(gb)
-
-print "Among new vars found {}".format(len(news.intersection(gb)))
-
-with open('candidates_50perc_threshold.txt', 'r') as fo:
-    c50 = fo.readlines()
-c50 = [line.strip("\", ', \", \n, }, {") for line in c50]
-
-with open('variables_not_in_catalogs.txt', 'r') as fo:
-    not_in_cat = fo.readlines()
-nic = [line.strip().split(' ')[1] for line in not_in_cat]
-
-# Catalogue variables
-cat_vars = set(c50).difference(set(nic))
-# Non-catalogue variable
-noncat_vars = set([line.strip().split(' ')[1] for line in not_in_cat if 'CST' not in line])
-
-# All variables
-all_vars = news.union(cat_vars).union(noncat_vars)
-gb_no = set([line.strip().split('_')[4].split('.')[0] for line in gb_no])
-
-found_bad = '181193' in gb
-print "Found known variable : ", found_bad
-
-FN = len(gb_no.intersection(all_vars))
-TP = len(all_vars.intersection(gb))
-TN = len(gb_no) - FN
-FP = len(gb) - TP
-recall = float(TP) / (TP + FN)
-precision = float(TP) / (TP + FP)
-F1 = 2 * precision * recall / (precision + recall)
-print "precision: {}".format(precision)
-print "recall: {}".format(recall)
-print "F1: {}".format(F1)
-print "TN={}, FP={}".format(TN, FP)
-print "FN={}, TP={}".format(FN, TP)
 

@@ -1,13 +1,42 @@
 # -*- coding: utf-8 -*-
+import sys
+sys.setrecursionlimit(10000)
 import pandas as pd
 import numpy as np
-from sklearn.metrics import roc_auc_score
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
 import xgboost as xgb
-from hyperopt import hp, fmin, tpe, STATUS_OK, Trials
+from sklearn.ensemble import VotingClassifier
+from sklearn.svm import SVC
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import Dropout
+from keras.constraints import maxnorm
+from keras.optimizers import SGD
+from keras.wrappers.scikit_learn import KerasClassifier
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import Imputer
 from sklearn.preprocessing import StandardScaler
+
+
+class FixedKerasClassifier(KerasClassifier):
+    def predict_proba(self, X, **kwargs):
+        kwargs = self.filter_sk_params(Sequential.predict_proba, kwargs)
+        probs = self.model.predict_proba(X, **kwargs)
+        if(probs.shape[1] == 1):
+            probs = np.hstack([1-probs,probs])
+        return probs
+
+    def predict(self, X, **kwargs):
+        kwargs = self.filter_sk_params(Sequential.predict, kwargs)
+        y = self.model.predict(X, **kwargs)
+        if(y.shape[1] == 1):
+            y = y[:, 0]
+        return y
+
+
 
 names = ['Magnitude', 'clipped_sigma', 'meaningless_1', 'meaningless_2',
          'star_ID', 'weighted_sigma', 'skew', 'kurt', 'I', 'J', 'K', 'L',
@@ -188,158 +217,121 @@ predictors = list(df)
 predictors.remove(target)
 dtrain = df
 
-# Was 7
-sss = StratifiedShuffleSplit(n_splits=1, test_size=0.25, random_state=77)
+sss = StratifiedShuffleSplit(n_splits=1, test_size=0.25, random_state=7)
 for train_indx, test_indx in sss.split(dtrain[predictors].index, dtrain['variable']):
     print train_indx, test_indx
     train = dtrain.iloc[train_indx]
     valid = dtrain.iloc[test_indx]
 
 
-def objective(space):
-    clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=space['lr'],
-                            max_depth=space['max_depth'],
-                            min_child_weight=space['min_child_weight'],
-                            subsample=space['subsample'],
-                            colsample_bytree=space['colsample_bytree'],
-                            colsample_bylevel=space['colsample_bylevel'],
-                            gamma=space['gamma'],
-                            scale_pos_weight=space['scale_pos_weight'])
-
-    # Try using pipeline
-    estimators = list()
-    estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
-                                          axis=0, verbose=2)))
-    # estimators.append(('scaler', StandardScaler()))
-    estimators.append(('clf', clf))
-    pipeline = Pipeline(estimators)
-
-    valid_ = valid[predictors]
-    train_ = train[predictors]
-    for name, transform in pipeline.steps[:-1]:
-        transform.fit(train_)
-        valid_ = transform.transform(valid_)
-        train_ = transform.transform(train_)
-
-    eval_set = [(train_, train['variable']),
-                (valid_, valid['variable'])]
-
-    pipeline.fit(train[predictors], train['variable'],
-                 clf__eval_set=eval_set, clf__eval_metric="auc",
-                 clf__early_stopping_rounds=50)
-    # clf.fit(train[predictors], train['variable'],
-    #         eval_set=eval_set, eval_metric="auc",
-    #         early_stopping_rounds=30)
-
-    pred = pipeline.predict_proba(valid[predictors])[:, 1]
-    # pred = clf.predict_proba(valid[predictors])[:, 1]
-    auc = roc_auc_score(valid['variable'], pred)
-    print "SCORE:", auc
-
-    return{'loss': 1-auc, 'status': STATUS_OK }
+clf_gb = xgb.XGBClassifier(n_estimators=100, learning_rate=0.1,
+                           max_depth=9, gamma=0.74, colsample_bylevel=0.72,
+                           colsample_bytree=0.58,
+                           min_child_weight=1,
+                           subsample=0.8)
+clf_knn = KNeighborsClassifier(n_neighbors=362, weights='distance', leaf_size=22,
+                               n_jobs=3)
+clf_svm = SVC(C=16.5036, class_weight='balanced', probability=True,
+              gamma=0.09138)
 
 
-space ={
-    'max_depth': hp.choice("x_max_depth", np.arange(2, 20, 1, dtype=int)),
-    'min_child_weight': hp.quniform('x_min_child', 1, 20, 2),
-    'subsample': hp.uniform('x_subsample', 0.5, 1),
-    'colsample_bytree': hp.uniform('x_csbtree', 0.5, 1),
-    'colsample_bylevel': hp.uniform('x_csblevel', 0.5, 1),
-    'gamma': hp.uniform('x_gamma', 0.0, 1),
-    'scale_pos_weight': hp.choice('x_spweight', (0, 50, 150)),
-    'lr': hp.quniform('lr', 0.001, 0.5, 0.025)
-    # 'lr': hp.loguniform('lr', -7, -1)
-}
+def create_baseline():
+    # create model
+    model = Sequential()
+    model.add(Dense(24, input_dim=24, init='normal', activation='relu',
+                    W_constraint=maxnorm(3)))
+    model.add(Dropout(0.1))
+    model.add(Dense(24, init='normal', activation='relu',
+                    W_constraint=maxnorm(3)))
+    model.add(Dropout(0.1))
+    model.add(Dense(12, init='normal', activation='relu'))
+    model.add(Dropout(0.1))
+    model.add(Dense(1, init='normal', activation='sigmoid'))
+    # Compile model
+    learning_rate = 0.1
+    decay_rate = learning_rate / epochs
+    momentum = 0.90
+    sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
+              nesterov=False)
+    model.compile(loss='binary_crossentropy', optimizer=sgd,
+                  metrics=['accuracy'])
+    return model
+
+epochs = 50
+# epochs = 125
+batch_size = 12
+clf_mlp = FixedKerasClassifier(build_fn=create_baseline, nb_epoch=epochs,
+                               batch_size=batch_size, verbose=0)
+
+# calibrated_clf_gb = CalibratedClassifierCV(clf_gb, method='sigmoid', cv=3)
+# calibrated_clf_knn = CalibratedClassifierCV(clf_knn, method='sigmoid', cv=3)
+# calibrated_clf_mlp = CalibratedClassifierCV(clf_mlp, method='sigmoid', cv=3)
+# calibrated_clf_svm = CalibratedClassifierCV(clf_svm, method='sigmoid', cv=3)
 
 
-trials = Trials()
-best = fmin(fn=objective,
-            space=space,
-            algo=tpe.suggest,
-            max_evals=5000,
-            trials=trials)
-
-import hyperopt
-print hyperopt.space_eval(space, best)
-
-best_pars = hyperopt.space_eval(space, best)
-clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=best_pars['lr'],
-                        max_depth=best_pars['max_depth'],
-                        min_child_weight=best_pars['min_child_weight'],
-                        subsample=best_pars['subsample'],
-                        colsample_bytree=best_pars['colsample_bytree'],
-                        colsample_bylevel=best_pars['colsample_bylevel'],
-                        gamma=best_pars['gamma'],
-                        scale_pos_weight=best_pars['scale_pos_weight'])
+# eclf = VotingClassifier(estimators=[('gb', calibrated_clf_gb),
+#                                     ('knn', calibrated_clf_knn),
+#                                     ('nn', calibrated_clf_mlp),
+#                                     ('svm', calibrated_clf_svm)],
+#                         voting='soft', weights=[1, 1, 1, 1], n_jobs=-1)
+eclf = VotingClassifier(estimators=[('gb', clf_gb),
+                                    ('knn', clf_knn),
+                                    ('nn', clf_mlp),
+                                    ('svm', clf_svm)],
+                        voting='soft', weights=[2, 1, 1, 1])
 
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
-estimators.append(('clf', clf))
+estimators.append(('scaler', StandardScaler()))
+estimators.append(('clf', eclf))
 pipeline = Pipeline(estimators)
 
-# Fit classifier with best hyperparameters on whole data set
-pipeline.fit(dtrain[predictors], dtrain['variable'])
+valid_ = valid[predictors]
+train_ = train[predictors]
+for name, transform in pipeline.steps[:-1]:
+    transform.fit(train_)
+    valid_ = transform.transform(valid_)
+    train_ = transform.transform(train_)
+
+eclf.fit(train_, train['variable'])
+
+# pred = eclf.predict_proba(valid_)[:, 1]
+y_pred = eclf.predict(valid_)
+# auc = roc_auc_score(valid['variable'], pred)
+recall = recall_score(valid['variable'], y_pred)
+pre = precision_score(valid['variable'], y_pred)
+print "Pr, Re: {} {}".format(pre, recall)
+# print "SCORE:", auc
+
+
+# Fit full training set
+train_ = dtrain[predictors]
+for name, transform in pipeline.steps[:-1]:
+    transform.fit(train_)
+    train_ = transform.transform(train_)
+eclf.fit(train_, dtrain['variable'])
 
 # Load blind test data
 file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics_normalized.log'
 file_tgt = os.path.join(data_dir, file_tgt)
-X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_delete,
-                                                  delta)
+X, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_delete,
+                                              delta)
+# Use fitted transformation steps
+for name, transform in pipeline.steps[:-1]:
+    print name, transform
+    X = transform.transform(X)
 
-y_probs = pipeline.predict_proba(df[predictors])[:, 1]
-idx = y_probs > 0.25
-idx_ = y_probs < 0.25
-gb_no = list(df_orig['star_ID'][idx_])
+
+y_pred = eclf.predict(X)
+# y_probs = eclf.predict_proba(X)
+
+idx = y_pred == 1.
+# idx = y_probs[:, 1] > 0.5
+# idx_ = y_probs[:, 1] < 0.5
+# ens_no = list(df_orig['star_ID'][idx_])
 print("Found {} variables".format(np.count_nonzero(idx)))
 
-with open('gb_results.txt', 'w') as fo:
-    for line in list(df_orig['star_ID'][idx]):
-        fo.write(line + '\n')
-
-# Check F1
-with open('clean_list_of_new_variables.txt', 'r') as fo:
-    news = fo.readlines()
-news = [line.strip().split(' ')[1] for line in news]
-news = set(news)
-
-with open('gb_results.txt', 'r') as fo:
-    gb = fo.readlines()
-gb = [line.strip().split('_')[4].split('.')[0] for line in gb]
-gb = set(gb)
-
-print "Among new vars found {}".format(len(news.intersection(gb)))
-
-with open('candidates_50perc_threshold.txt', 'r') as fo:
-    c50 = fo.readlines()
-c50 = [line.strip("\", ', \", \n, }, {") for line in c50]
-
-with open('variables_not_in_catalogs.txt', 'r') as fo:
-    not_in_cat = fo.readlines()
-nic = [line.strip().split(' ')[1] for line in not_in_cat]
-
-# Catalogue variables
-cat_vars = set(c50).difference(set(nic))
-# Non-catalogue variable
-noncat_vars = set([line.strip().split(' ')[1] for line in not_in_cat if 'CST' not in line])
-
-# All variables
-all_vars = news.union(cat_vars).union(noncat_vars)
-gb_no = set([line.strip().split('_')[4].split('.')[0] for line in gb_no])
-
-found_bad = '181193' in gb
-print "Found known variable : ", found_bad
-
-FN = len(gb_no.intersection(all_vars))
-TP = len(all_vars.intersection(gb))
-TN = len(gb_no) - FN
-FP = len(gb) - TP
-recall = float(TP) / (TP + FN)
-precision = float(TP) / (TP + FP)
-F1 = 2 * precision * recall / (precision + recall)
-print "precision: {}".format(precision)
-print "recall: {}".format(recall)
-print "F1: {}".format(F1)
-print "TN={}, FP={}".format(TN, FP)
-print "FN={}, TP={}".format(FN, TP)
-
+# with open('ens_results.txt', 'w') as fo:
+#     for line in list(df_orig['star_ID'][idx]):
+#         fo.write(line + '\n')

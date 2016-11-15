@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 import pandas as pd
 import numpy as np
+from sklearn import cross_validation
+from sklearn.grid_search import RandomizedSearchCV
+from sklearn.metrics import f1_score
 from sklearn.metrics import roc_auc_score
 import xgboost as xgb
 from hyperopt import hp, fmin, tpe, STATUS_OK, Trials
@@ -161,10 +164,10 @@ def load_data_tgt(fname, names, names_to_delete, delta):
     X = np.array(df[list(features_names)].values, dtype=float)
 
     # Original data
-    df_orig = pd.read_table(fname, names=names, engine='python', na_values='+inf',
-                            sep=r"\s*", usecols=range(30))
+    df = pd.read_table(fname, names=names, engine='python', na_values='+inf',
+                       sep=r"\s*", usecols=range(30))
 
-    return X, features_names, df, df_orig
+    return X, features_names, df
 
 
 import os
@@ -188,12 +191,42 @@ predictors = list(df)
 predictors.remove(target)
 dtrain = df
 
-# Was 7
-sss = StratifiedShuffleSplit(n_splits=1, test_size=0.25, random_state=77)
+sss = StratifiedShuffleSplit(n_splits=1, test_size=0.25, random_state=7)
 for train_indx, test_indx in sss.split(dtrain[predictors].index, dtrain['variable']):
     print train_indx, test_indx
     train = dtrain.iloc[train_indx]
     valid = dtrain.iloc[test_indx]
+
+
+
+from scipy import stats
+clf = xgb.XGBClassifier(objective='binary:logistic')
+param_dist = {'n_estimators': stats.randint(150, 500),
+              'learning_rate': stats.uniform(0.01, 0.07),
+              'subsample': stats.uniform(0.3, 0.7),
+              'max_depth': [3, 4, 5, 6, 7, 8, 9],
+              'colsample_bytree': stats.uniform(0.5, 0.45),
+              'min_child_weight': [1, 2, 3]
+             }
+clf = RandomizedSearchCV(clf, param_distributions=param_dist, n_iter=25,
+                         scoring='f1', error_score=0, verbose=3, n_jobs=-1)
+
+numFolds = 4
+folds = cross_validation.StratifiedKFold(dtrain['variable'], n_folds=4,
+                                         shuffle=True, random_state=1)
+
+estimators = []
+results = np.zeros(len(X))
+score = 0.0
+for train_index, test_index in folds:
+    X_train, X_test = X[train_index], X[test_index]
+    y_train, y_test = y[train_index], y[test_index]
+    clf.fit(X_train, y_train)
+
+    estimators.append(clf.best_estimator_)
+    results[test_index] = clf.predict(X_test)
+    score += f1_score(y_test, results[test_index])
+score /= numFolds
 
 
 def objective(space):
@@ -202,9 +235,7 @@ def objective(space):
                             min_child_weight=space['min_child_weight'],
                             subsample=space['subsample'],
                             colsample_bytree=space['colsample_bytree'],
-                            colsample_bylevel=space['colsample_bylevel'],
-                            gamma=space['gamma'],
-                            scale_pos_weight=space['scale_pos_weight'])
+                            colsample_bylevel=space['colsample_bylevel'])
 
     # Try using pipeline
     estimators = list()
@@ -240,15 +271,14 @@ def objective(space):
 
 
 space ={
-    'max_depth': hp.choice("x_max_depth", np.arange(2, 20, 1, dtype=int)),
-    'min_child_weight': hp.quniform('x_min_child', 1, 20, 2),
+    'max_depth': hp.choice("x_max_depth", (2,  5,  7,  9, 12, 15)),
+    'min_child_weight': hp.quniform('x_min_child', 1, 10, 2),
     'subsample': hp.uniform('x_subsample', 0.5, 1),
     'colsample_bytree': hp.uniform('x_csbtree', 0.5, 1),
     'colsample_bylevel': hp.uniform('x_csblevel', 0.5, 1),
     'gamma': hp.uniform('x_gamma', 0.0, 1),
     'scale_pos_weight': hp.choice('x_spweight', (0, 50, 150)),
-    'lr': hp.quniform('lr', 0.001, 0.5, 0.025)
-    # 'lr': hp.loguniform('lr', -7, -1)
+    'lr': hp.loguniform('lr', -7, -1)
 }
 
 
@@ -256,90 +286,14 @@ trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=5000,
+            max_evals=2000,
             trials=trials)
 
 import hyperopt
 print hyperopt.space_eval(space, best)
 
-best_pars = hyperopt.space_eval(space, best)
-clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=best_pars['lr'],
-                        max_depth=best_pars['max_depth'],
-                        min_child_weight=best_pars['min_child_weight'],
-                        subsample=best_pars['subsample'],
-                        colsample_bytree=best_pars['colsample_bytree'],
-                        colsample_bylevel=best_pars['colsample_bylevel'],
-                        gamma=best_pars['gamma'],
-                        scale_pos_weight=best_pars['scale_pos_weight'])
-
-estimators = list()
-estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
-                                      axis=0, verbose=2)))
-estimators.append(('clf', clf))
-pipeline = Pipeline(estimators)
-
-# Fit classifier with best hyperparameters on whole data set
-pipeline.fit(dtrain[predictors], dtrain['variable'])
-
 # Load blind test data
-file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics_normalized.log'
-file_tgt = os.path.join(data_dir, file_tgt)
-X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_delete,
-                                                  delta)
-
-y_probs = pipeline.predict_proba(df[predictors])[:, 1]
-idx = y_probs > 0.25
-idx_ = y_probs < 0.25
-gb_no = list(df_orig['star_ID'][idx_])
-print("Found {} variables".format(np.count_nonzero(idx)))
-
-with open('gb_results.txt', 'w') as fo:
-    for line in list(df_orig['star_ID'][idx]):
-        fo.write(line + '\n')
-
-# Check F1
-with open('clean_list_of_new_variables.txt', 'r') as fo:
-    news = fo.readlines()
-news = [line.strip().split(' ')[1] for line in news]
-news = set(news)
-
-with open('gb_results.txt', 'r') as fo:
-    gb = fo.readlines()
-gb = [line.strip().split('_')[4].split('.')[0] for line in gb]
-gb = set(gb)
-
-print "Among new vars found {}".format(len(news.intersection(gb)))
-
-with open('candidates_50perc_threshold.txt', 'r') as fo:
-    c50 = fo.readlines()
-c50 = [line.strip("\", ', \", \n, }, {") for line in c50]
-
-with open('variables_not_in_catalogs.txt', 'r') as fo:
-    not_in_cat = fo.readlines()
-nic = [line.strip().split(' ')[1] for line in not_in_cat]
-
-# Catalogue variables
-cat_vars = set(c50).difference(set(nic))
-# Non-catalogue variable
-noncat_vars = set([line.strip().split(' ')[1] for line in not_in_cat if 'CST' not in line])
-
-# All variables
-all_vars = news.union(cat_vars).union(noncat_vars)
-gb_no = set([line.strip().split('_')[4].split('.')[0] for line in gb_no])
-
-found_bad = '181193' in gb
-print "Found known variable : ", found_bad
-
-FN = len(gb_no.intersection(all_vars))
-TP = len(all_vars.intersection(gb))
-TN = len(gb_no) - FN
-FP = len(gb) - TP
-recall = float(TP) / (TP + FN)
-precision = float(TP) / (TP + FP)
-F1 = 2 * precision * recall / (precision + recall)
-print "precision: {}".format(precision)
-print "recall: {}".format(recall)
-print "F1: {}".format(F1)
-print "TN={}, FP={}".format(TN, FP)
-print "FN={}, TP={}".format(FN, TP)
-
+# file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics_normalized.log'
+# file_tgt = os.path.join(data_dir, file_tgt)
+# X, feature_names, df = load_data_tgt(file_tgt, names, names_to_delete,
+#                                      delta)
