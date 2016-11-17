@@ -18,6 +18,7 @@ from hyperas import optim
 from hyperas.distributions import choice, uniform, conditional, loguniform
 from sklearn.cross_validation import cross_val_score
 from sklearn.cross_validation import StratifiedShuffleSplit, StratifiedKFold
+from sklearn.metrics import confusion_matrix
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import Imputer
@@ -146,6 +147,11 @@ names = ['Magnitude', 'clipped_sigma', 'meaningless_1', 'meaningless_2',
 names_to_delete = ['Magnitude', 'meaningless_1', 'meaningless_2', 'star_ID',
                    'Npts', 'CSSD']
 X, y, df, feature_names, delta = load_data([file_0, file_1], names, names_to_delete)
+target = 'variable'
+predictors = list(df)
+predictors.remove(target)
+
+
 from sklearn.cross_validation import StratifiedShuffleSplit, StratifiedKFold
 sss = StratifiedShuffleSplit(y, n_iter=1, test_size=0.25, random_state=123)
 for train_index, test_index in sss:
@@ -182,28 +188,39 @@ def keras_fmin_fnct(space):
     '''
 
     model = Sequential()
-    model.add(Dense(24, input_dim=24, activation='relu',
+    model.add(Dense(24, input_dim=24, init='normal', activation='relu',
                     W_constraint=maxnorm(3)))
     model.add(Dropout(space['Dropout']))
-    model.add(Dense(space['Dense'], activation='relu',
+    model.add(Dense(space['Dense'], init='normal', activation='relu',
                     W_constraint=maxnorm(3)))
     # model.add(Activation(space['Activation']))
     model.add(Dropout(space['Dropout_1']))
 
     if conditional(space['conditional']) == 'three':
-        model.add(Dense(12, activation='relu', W_constraint=maxnorm(3)))
+        model.add(Dense(12, activation='relu', W_constraint=maxnorm(3),
+                        init='normal'))
         model.add(Dropout(space['Dropout_2']))
     model.add(Dense(1, init='normal', activation='sigmoid'))
-    model.compile(loss='binary_crossentropy',
-                  optimizer=space['optimizer'],
+
+    # Compile model
+    learning_rate = space["lr"]
+    decay_rate = learning_rate / 400.
+    momentum = 0.90
+    sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
+              nesterov=False)
+    model.compile(loss='binary_crossentropy', optimizer=sgd,
                   metrics=['accuracy'])
 
-    earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=3,
+    # model.compile(loss='binary_crossentropy',
+    #               optimizer=space['optimizer'],
+    #               metrics=['accuracy'])
+
+    earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=10,
                                             verbose=1, mode='auto')
 
     model.fit(X_train, y_train,
               batch_size=space['batch_size'],
-              nb_epoch=200,
+              nb_epoch=400,
               show_accuracy=True,
               verbose=2,
               validation_data=(X_test, y_test),
@@ -223,7 +240,8 @@ space = {
         'Dropout_1': hp.uniform('Dropout_1', 0, 1),
         'conditional': hp.choice('conditional', ['two', 'three']),
         'Dropout_2': hp.uniform('Dropout_2', 0, 1),
-        'optimizer': hp.choice('optimizer', ['rmsprop', 'adam', 'sgd']),
+        # 'optimizer': hp.choice('optimizer', ['rmsprop', 'adam', 'sgd']),
+        'lr': hp.quniform('lr', 0.025, 0.5, 0.025),
         'batch_size': hp.choice('batch_size', [32, 64, 128, 256, 512, 1024]),
     }
 
@@ -231,8 +249,194 @@ trials = Trials()
 best = fmin(fn=keras_fmin_fnct,
             space=space,
             algo=tpe.suggest,
-            max_evals=15,
+            max_evals=100,
             trials=trials)
 
 import hyperopt
 print hyperopt.space_eval(space, best)
+best_pars = hyperopt.space_eval(space, best)
+
+
+# Now show plots
+sss = StratifiedShuffleSplit(y, n_iter=1, test_size=0.25, random_state=123)
+for train_index, test_index in sss:
+    X_train, X_test = X[train_index], X[test_index]
+    y_train, y_test = y[train_index], y[test_index]
+
+transforms = list()
+transforms.append(('imputer', Imputer(missing_values='NaN', strategy='median',
+                                      axis=0, verbose=2)))
+transforms.append(('scaler', StandardScaler()))
+pipeline = Pipeline(transforms)
+
+for name, transform in pipeline.steps:
+    transform.fit(X_train)
+    X_test = transform.transform(X_test)
+    X_train = transform.transform(X_train)
+
+history = callbacks.History()
+earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=30,
+                                        verbose=1, mode='auto')
+
+# Build model with best parameters
+model = Sequential()
+model.add(Dense(24, input_dim=24, init='normal', activation='relu',
+                W_constraint=maxnorm(3)))
+model.add(Dropout(best_pars['Dropout']))
+model.add(Dense(best_pars['Dense'], init='normal', activation='relu',
+                W_constraint=maxnorm(3)))
+# model.add(Activation(space['Activation']))
+model.add(Dropout(best_pars['Dropout_1']))
+
+if conditional(best_pars['conditional']) == 'three':
+    model.add(Dense(12, activation='relu', W_constraint=maxnorm(3),
+                    init='normal'))
+    model.add(Dropout(best_pars['Dropout_2']))
+model.add(Dense(1, init='normal', activation='sigmoid'))
+
+# Compile model
+learning_rate = best_pars["lr"]
+decay_rate = learning_rate / 400.
+momentum = 0.90
+sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
+          nesterov=False)
+model.compile(loss='binary_crossentropy', optimizer=sgd,
+              metrics=['accuracy'])
+
+model.fit(X_train, y_train,
+          batch_size=best_pars['batch_size'],
+          nb_epoch=400,
+          show_accuracy=True,
+          verbose=2,
+          validation_data=(X_test, y_test),
+          callbacks=[earlyStopping, history])
+
+n_epoch = history.epoch
+
+y_pred = model.predict(X_test)
+y_pred[y_pred < 0.5] = 0.
+y_pred[y_pred >= 0.5] = 1.
+y_probs = model.predict_proba(X_test)
+cm = confusion_matrix(y_test, y_pred)
+print_cm_summary(cm)
+
+
+import matplotlib.pyplot as plt
+plt.plot(history.history['acc'])
+plt.plot(history.history['val_acc'])
+plt.title('model accuracy')
+plt.ylabel('accuracy')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('model loss')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+
+################################################################################
+# Now fit all train data
+transforms = list()
+transforms.append(('imputer', Imputer(missing_values='NaN', strategy='median',
+                                      axis=0, verbose=2)))
+transforms.append(('scaler', StandardScaler()))
+pipeline = Pipeline(transforms)
+for name, transform in pipeline.steps:
+    transform.fit(X)
+    X = transform.transform(X)
+
+# Build model with best parameters
+model = Sequential()
+model.add(Dense(24, input_dim=24, init='normal', activation='relu',
+                W_constraint=maxnorm(3)))
+model.add(Dropout(best_pars['Dropout']))
+model.add(Dense(best_pars['Dense'], init='normal', activation='relu',
+                W_constraint=maxnorm(3)))
+# model.add(Activation(space['Activation']))
+model.add(Dropout(best_pars['Dropout_1']))
+
+if conditional(best_pars['conditional']) == 'three':
+    model.add(Dense(12, activation='relu', W_constraint=maxnorm(3),
+                    init='normal'))
+    model.add(Dropout(best_pars['Dropout_2']))
+model.add(Dense(1, init='normal', activation='sigmoid'))
+
+# Compile model
+learning_rate = best_pars["lr"]
+decay_rate = learning_rate / 400.
+momentum = 0.90
+sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
+          nesterov=False)
+model.compile(loss='binary_crossentropy', optimizer=sgd,
+              metrics=['accuracy'])
+
+model.fit(X, y, batch_size=best_pars['batch_size'], nb_epoch=int(1.2*n_epoch),
+          show_accuracy=True, verbose=2)
+
+# Load blind test data
+file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics_normalized.log'
+file_tgt = os.path.join(data_dir, file_tgt)
+X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_delete,
+                                                  delta)
+# Use the same transform
+for name, transform in pipeline.steps:
+    X_tgt = transform.transform(X_tgt)
+
+y_probs = model.predict(X_tgt)[:, 0]
+idx = y_probs > 0.5
+idx_ = y_probs < 0.5
+nn_no = list(df_orig['star_ID'][idx_])
+print("Found {} variables".format(np.count_nonzero(idx)))
+
+with open('nn_results.txt', 'w') as fo:
+    for line in list(df_orig['star_ID'][idx]):
+        fo.write(line + '\n')
+
+# Analyze results
+with open('clean_list_of_new_variables.txt', 'r') as fo:
+    news = fo.readlines()
+news = [line.strip().split(' ')[1] for line in news]
+news = set(news)
+
+with open('gb_results.txt', 'r') as fo:
+    nn = fo.readlines()
+nn = [line.strip().split('_')[4].split('.')[0] for line in nn]
+nn = set(nn)
+
+print "Among new vars found {}".format(len(news.intersection(nn)))
+
+with open('candidates_50perc_threshold.txt', 'r') as fo:
+    c50 = fo.readlines()
+c50 = [line.strip("\", ', \", \n, }, {") for line in c50]
+
+with open('variables_not_in_catalogs.txt', 'r') as fo:
+    not_in_cat = fo.readlines()
+nic = [line.strip().split(' ')[1] for line in not_in_cat]
+
+# Catalogue variables
+cat_vars = set(c50).difference(set(nic))
+# Non-catalogue variable
+noncat_vars = set([line.strip().split(' ')[1] for line in not_in_cat if 'CST' not in line])
+
+# All variables
+all_vars = news.union(cat_vars).union(noncat_vars)
+nn_no = set([line.strip().split('_')[4].split('.')[0] for line in nn_no])
+
+found_bad = '181193' in nn
+print "Found known variable : ", found_bad
+
+FN = len(nn_no.intersection(all_vars))
+TP = len(all_vars.intersection(nn))
+TN = len(nn_no) - FN
+FP = len(nn) - TP
+recall = float(TP) / (TP + FN)
+precision = float(TP) / (TP + FP)
+F1 = 2 * precision * recall / (precision + recall)
+print "precision: {}".format(precision)
+print "recall: {}".format(recall)
+print "F1: {}".format(F1)
+print "TN={}, FP={}".format(TN, FP)
+print "FN={}, TP={}".format(FN, TP)
