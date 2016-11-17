@@ -4,10 +4,11 @@ import numpy as np
 from sklearn.metrics import roc_auc_score
 import xgboost as xgb
 from hyperopt import hp, fmin, tpe, STATUS_OK, Trials
-from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.model_selection import StratifiedShuffleSplit, StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import Imputer
 from sklearn.preprocessing import StandardScaler
+
 
 names = ['Magnitude', 'clipped_sigma', 'meaningless_1', 'meaningless_2',
          'star_ID', 'weighted_sigma', 'skew', 'kurt', 'I', 'J', 'K', 'L',
@@ -189,22 +190,26 @@ predictors.remove(target)
 dtrain = df
 
 # Was 7
-sss = StratifiedShuffleSplit(n_splits=1, test_size=0.25, random_state=77)
-for train_indx, test_indx in sss.split(dtrain[predictors].index, dtrain['variable']):
-    print train_indx, test_indx
-    train = dtrain.iloc[train_indx]
-    valid = dtrain.iloc[test_indx]
+# 5000 - was 77
+# sss = StratifiedShuffleSplit(n_splits=1, test_size=0.25, random_state=777)
+# for train_indx, test_indx in sss.split(dtrain[predictors].index, dtrain['variable']):
+#     print train_indx, test_indx
+#     train = dtrain.iloc[train_indx]
+#     valid = dtrain.iloc[test_indx]
+
+kfold = StratifiedKFold(n_splits=4, shuffle=True, random_state=123)
 
 
 def objective(space):
-    clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=space['lr'],
+    clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=0.025,
                             max_depth=space['max_depth'],
                             min_child_weight=space['min_child_weight'],
                             subsample=space['subsample'],
                             colsample_bytree=space['colsample_bytree'],
                             colsample_bylevel=space['colsample_bylevel'],
                             gamma=space['gamma'],
-                            scale_pos_weight=space['scale_pos_weight'])
+                            scale_pos_weight=200.)
+                            # scale_pos_weight=space['scale_pos_weight'])
 
     # Try using pipeline
     estimators = list()
@@ -214,40 +219,50 @@ def objective(space):
     estimators.append(('clf', clf))
     pipeline = Pipeline(estimators)
 
-    valid_ = valid[predictors]
-    train_ = train[predictors]
-    for name, transform in pipeline.steps[:-1]:
-        transform.fit(train_)
-        valid_ = transform.transform(valid_)
-        train_ = transform.transform(train_)
+    scores = list()
+    best_n = ""
+    for train_indx, test_indx in kfold.split(dtrain[predictors].index,
+                                             dtrain['variable']):
+        train = dtrain.iloc[train_indx]
+        valid = dtrain.iloc[test_indx]
 
-    eval_set = [(train_, train['variable']),
-                (valid_, valid['variable'])]
+        valid_ = valid[predictors]
+        train_ = train[predictors]
+        for name, transform in pipeline.steps[:-1]:
+            transform.fit(train_)
+            valid_ = transform.transform(valid_)
+            train_ = transform.transform(train_)
 
-    pipeline.fit(train[predictors], train['variable'],
-                 clf__eval_set=eval_set, clf__eval_metric="auc",
-                 clf__early_stopping_rounds=50)
-    # clf.fit(train[predictors], train['variable'],
-    #         eval_set=eval_set, eval_metric="auc",
-    #         early_stopping_rounds=30)
+        eval_set = [(train_, train['variable']),
+                    (valid_, valid['variable'])]
 
-    pred = pipeline.predict_proba(valid[predictors])[:, 1]
-    # pred = clf.predict_proba(valid[predictors])[:, 1]
-    auc = roc_auc_score(valid['variable'], pred)
-    print "SCORE:", auc
+        pipeline.fit(train[predictors], train['variable'],
+                     clf__eval_set=eval_set, clf__eval_metric="auc",
+                     clf__early_stopping_rounds=50)
+        # clf.fit(train[predictors], train['variable'],
+        #         eval_set=eval_set, eval_metric="auc",
+        #         early_stopping_rounds=30)
 
-    return{'loss': 1-auc, 'status': STATUS_OK }
+        pred = pipeline.predict_proba(valid[predictors])[:, 1]
+        # pred = clf.predict_proba(valid[predictors])[:, 1]
+        auc = roc_auc_score(valid['variable'], pred)
+        scores.append(auc)
+        best_n = best_n + " " + str(pipeline.named_steps['clf'].best_ntree_limit)
+    print "SCORE:", np.mean(scores)
+
+    return{'loss': 1-np.mean(scores), 'status': STATUS_OK ,
+           'attachments': {'best_n': best_n}}
 
 
 space ={
-    'max_depth': hp.choice("x_max_depth", np.arange(2, 20, 1, dtype=int)),
+    'max_depth': hp.choice("x_max_depth", np.arange(5, 12, 1, dtype=int)),
     'min_child_weight': hp.quniform('x_min_child', 1, 20, 2),
-    'subsample': hp.uniform('x_subsample', 0.5, 1),
-    'colsample_bytree': hp.uniform('x_csbtree', 0.5, 1),
-    'colsample_bylevel': hp.uniform('x_csblevel', 0.5, 1),
-    'gamma': hp.uniform('x_gamma', 0.0, 1),
-    'scale_pos_weight': hp.choice('x_spweight', (0, 50, 150)),
-    'lr': hp.quniform('lr', 0.001, 0.5, 0.025)
+    'subsample': hp.quniform('x_subsample', 0.5, 1, 0.05),
+    'colsample_bytree': hp.quniform('x_csbtree', 0.5, 1, 0.05),
+    'colsample_bylevel': hp.quniform('x_csblevel', 0.5, 1, 0.05),
+    'gamma': hp.quniform('x_gamma', 0.0, 1, 0.05)
+    # 'scale_pos_weight': hp.quniform('x_spweight', 0, 300, 50),
+    # 'lr': hp.quniform('lr', 0.001, 0.5, 0.025)
     # 'lr': hp.loguniform('lr', -7, -1)
 }
 
@@ -256,21 +271,25 @@ trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=5000,
+            max_evals=100,
             trials=trials)
 
 import hyperopt
 print hyperopt.space_eval(space, best)
 
 best_pars = hyperopt.space_eval(space, best)
-clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=best_pars['lr'],
+best_n = trials.attachments['ATTACH::{}::best_n'.format(trials.best_trial['tid'])]
+best_n = max([int(n) for n in best_n.strip().split(' ')])
+
+clf = xgb.XGBClassifier(n_estimators=3000,
+                        learning_rate=0.025,
                         max_depth=best_pars['max_depth'],
                         min_child_weight=best_pars['min_child_weight'],
                         subsample=best_pars['subsample'],
                         colsample_bytree=best_pars['colsample_bytree'],
                         colsample_bylevel=best_pars['colsample_bylevel'],
                         gamma=best_pars['gamma'],
-                        scale_pos_weight=best_pars['scale_pos_weight'])
+                        scale_pos_weight=200.)
 
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
@@ -288,8 +307,8 @@ X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_dele
                                                   delta)
 
 y_probs = pipeline.predict_proba(df[predictors])[:, 1]
-idx = y_probs > 0.25
-idx_ = y_probs < 0.25
+idx = y_probs > 0.5
+idx_ = y_probs < 0.5
 gb_no = list(df_orig['star_ID'][idx_])
 print("Found {} variables".format(np.count_nonzero(idx)))
 
