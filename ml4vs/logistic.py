@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 import os
 import numpy as np
-from sklearn import decomposition
-from sklearn.cross_validation import StratifiedKFold, cross_val_score
-from sklearn.metrics import roc_auc_score
-from sklearn.svm import SVC
 import hyperopt
+from sklearn import decomposition
+from sklearn.metrics import roc_auc_score
 from hyperopt import hp, fmin, tpe, STATUS_OK, Trials
+from sklearn.cross_validation import StratifiedKFold, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import Imputer
 from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
 from data_load import load_data, load_data_tgt
 
 
@@ -36,8 +36,9 @@ kfold = StratifiedKFold(dtrain[target], n_folds=4, shuffle=True, random_state=1)
 
 
 def objective(space):
-    clf = SVC(C=space['C'], class_weight='balanced', probability=False,
-              gamma=space['gamma'], random_state=1)
+    clf = LogisticRegression(C=space['C'], class_weight={0: 1, 1: space['cw']},
+                             random_state=1, max_iter=300, n_jobs=1,
+                             tol=10.**(-5))
     pca = decomposition.PCA(n_components=space['n_pca'], random_state=1)
     estimators = list()
     estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
@@ -53,16 +54,17 @@ def objective(space):
 
     return{'loss': 1-f1, 'status': STATUS_OK}
 
-space = {'C': hp.loguniform('C', -6, 4),
-         'gamma': hp.loguniform('gamma', -6, 4),
-         'n_pca': hp.choice('n_pca', (12, 13, 14, 15, 16, 17, 18, 19, 20))}
+
+space = {'C': hp.uniform('C', 1, 30),
+         'cw': hp.choice('cw', (2, 3, 4, 5, 6, 10)),
+         'n_pca': hp.choice('n_pca', (14, 15, 16, 17, 18, 19, 20))}
 
 
 trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=5,
+            max_evals=500,
             trials=trials)
 
 print hyperopt.space_eval(space, best)
@@ -75,8 +77,9 @@ X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_dele
                                                   delta)
 
 # Fit model on all training data
-clf = SVC(C=best_pars['C'], class_weight='balanced', probability=True,
-          gamma=best_pars['gamma'], random_state=1)
+clf = LogisticRegression(C=best_pars['C'], class_weight={0: 1,
+                                                         1: best_pars['cw']},
+                         random_state=1, max_iter=300, n_jobs=1, tol=10.**(-5))
 pca = decomposition.PCA(n_components=best_pars['n_pca'], random_state=1)
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
@@ -94,7 +97,7 @@ idx_ = y_probs < 0.5
 gb_no = list(df_orig['star_ID'][idx_])
 print("Found {} variables".format(np.count_nonzero(idx)))
 
-with open('svm_results.txt', 'w') as fo:
+with open('lr_results.txt', 'w') as fo:
     for line in list(df_orig['star_ID'][idx]):
         fo.write(line + '\n')
 
@@ -104,7 +107,7 @@ with open('clean_list_of_new_variables.txt', 'r') as fo:
 news = [line.strip().split(' ')[1] for line in news]
 news = set(news)
 
-with open('svm_results.txt', 'r') as fo:
+with open('lr_results.txt', 'r') as fo:
     gb = fo.readlines()
 gb = [line.strip().split('_')[4].split('.')[0] for line in gb]
 gb = set(gb)
@@ -144,4 +147,3 @@ print "recall: {}".format(recall)
 print "F1: {}".format(F1)
 print "TN={}, FP={}".format(TN, FP)
 print "FN={}, TP={}".format(FN, TP)
-
