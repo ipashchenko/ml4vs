@@ -52,18 +52,19 @@ def load_data(fnames, names, names_to_delete):
                                                   df[feature].isnull().sum()))
         print("=======================")
 
+    # Concatenate dfs
+    df = pd.concat(dfs, axis=0)
+    df['boolNXS'] = np.array(df['NXS'] == 0, dtype=int)
+    df = pd.get_dummies(df, columns=['boolNXS'])
+    features_names = list(df)
+
     # Convert to numpy arrays
-    # Features
-    X = list()
-    for df in dfs:
-        X.append(np.array(df[list(features_names)].values, dtype=float))
-    X = np.vstack(X)
+    X = np.array(df[list(features_names)].values, dtype=float)
     # Responses
     y = np.zeros(len(X))
     y[len(dfs[0]):] = np.ones(len(X) - len(dfs[0]))
 
-    df = pd.concat(dfs)
-    df['variable'] = y
+    df['variable'] = np.array(y, dtype=int)
 
     return X, y, df, features_names, delta
 
@@ -99,6 +100,10 @@ def load_data_tgt(fname, names, names_to_delete, delta):
         print("Feature {} has {} NaNs".format(feature,
                                               df[feature].isnull().sum()))
     print("=======================")
+
+    df['boolNXS'] = np.array(df['NXS'] == 0, dtype=int)
+    df = pd.get_dummies(df, columns=['boolNXS'])
+    features_names = list(df)
 
     # Convert to numpy arrays
     # Features
