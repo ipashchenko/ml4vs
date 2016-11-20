@@ -3,9 +3,10 @@ import os
 import numpy as np
 import hyperopt
 from sklearn import decomposition
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import confusion_matrix
 from hyperopt import hp, fmin, tpe, STATUS_OK, Trials
 from sklearn.cross_validation import StratifiedKFold, cross_val_score
+from sklearn.model_selection import cross_val_predict
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import Imputer
 from sklearn.preprocessing import StandardScaler
@@ -48,8 +49,23 @@ def objective(space):
     estimators.append(('clf', clf))
     pipeline = Pipeline(estimators)
 
-    f1 = np.mean(cross_val_score(pipeline, X, y, cv=kfold, scoring='f1',
-                                 verbose=1, n_jobs=4))
+    # f1 = np.mean(cross_val_score(pipeline, X, y, cv=kfold, scoring='f1',
+    #                              verbose=1, n_jobs=4))
+    y_preds = cross_val_predict(pipeline, X, y, cv=kfold, n_jobs=4)
+    CMs = list()
+    for train_idx, test_idx in kfold:
+        CMs.append(confusion_matrix(y[test_idx], y_preds[test_idx]))
+    CM = np.sum(CMs, axis=0)
+
+    FN = CM[1][0]
+    TP = CM[1][1]
+    FP = CM[0][1]
+    print "TP = {}".format(TP)
+    print "FP = {}".format(FP)
+    print "FN = {}".format(FN)
+
+    f1 = 2. * TP / (2. * TP + FP + FN)
+
     print "SCORE:", f1
 
     return{'loss': 1-f1, 'status': STATUS_OK}

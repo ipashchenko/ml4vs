@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
 import os
 import numpy as np
+import hyperopt
 from sklearn import decomposition
-from sklearn.cross_validation import StratifiedKFold
-from sklearn.model_selection import cross_val_predict, cross_val_score
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics import roc_auc_score
-from sklearn.svm import SVC
-import hyperopt
 from hyperopt import hp, fmin, tpe, STATUS_OK, Trials
+from sklearn.cross_validation import StratifiedKFold
+from sklearn.model_selection import cross_val_predict
+from sklearn.model_selection import cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import Imputer
 from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
 from data_load import load_data, load_data_tgt
 
 
@@ -38,16 +39,17 @@ kfold = StratifiedKFold(dtrain[target], n_folds=4, shuffle=True, random_state=1)
 
 
 def objective(space):
-    print "C, gamma, npca : {}, {}, {}".format(space['C'], space['gamma'],
-                                               space['n_pca'])
-    clf = SVC(C=space['C'], class_weight='balanced', probability=False,
-              gamma=space['gamma'], random_state=1)
-    pca = decomposition.PCA(n_components=space['n_pca'], random_state=1)
+    clf = RandomForestClassifier(n_estimators=space['n_estimators'],
+                                 max_depth=space['max_depth'],
+                                 max_features=space['max_features'],
+                                 min_samples_split=space['mss'],
+                                 min_samples_leaf=space['msl'],
+                                 class_weight='balanced_subsample',
+                                 verbose=1, random_state=1, n_jobs=1)
     estimators = list()
     estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                           axis=0, verbose=2)))
     estimators.append(('scaler', StandardScaler()))
-    estimators.append(('pca', pca))
     estimators.append(('clf', clf))
     pipeline = Pipeline(estimators)
 
@@ -71,9 +73,13 @@ def objective(space):
 
     return{'loss': 1-f1, 'status': STATUS_OK}
 
-space = {'C': hp.loguniform('C', -6, 4),
-         'gamma': hp.loguniform('gamma', -6, 4),
-         'n_pca': hp.choice('n_pca', (12, 13, 14, 15, 16, 17, 18, 19, 20))}
+
+space = {'n_estimators': hp.choice('n_estimators', np.arange(200, 1000, 100,
+                                                             dtype=int)),
+         'max_depth': hp.choice('max_depth', np.arange(2, 22, dtype=int)),
+         'max_features': hp.choice('max_features', np.arange(5, 12, dtype=int)),
+         'mss': hp.choice('mss', np.arange(2, 20, 2, dtype=int)),
+         'msl': hp.choice('msl', np.arange(1, 10, dtype=int))}
 
 
 trials = Trials()
@@ -93,26 +99,29 @@ X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_dele
                                                   delta)
 
 # Fit model on all training data
-clf = SVC(C=best_pars['C'], class_weight='balanced', probability=True,
-          gamma=best_pars['gamma'], random_state=1)
-pca = decomposition.PCA(n_components=best_pars['n_pca'], random_state=1)
+clf = RandomForestClassifier(n_estimators=best_pars['n_estimators'],
+                             max_depth=best_pars['max_depth'],
+                             max_features=best_pars['max_features'],
+                             min_samples_split=best_pars['mss'],
+                             min_samples_leaf=best_pars['msl'],
+                             class_weight='balanced_subsample',
+                             verbose=1, random_state=1)
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
 estimators.append(('scaler', StandardScaler()))
-estimators.append(('pca', pca))
 estimators.append(('clf', clf))
 pipeline = Pipeline(estimators)
 pipeline.fit(X, y)
 
-# Predict clases on new data
+# Predict classes on new data
 y_probs = pipeline.predict_proba(X_tgt)[:, 1]
 idx = y_probs > 0.5
 idx_ = y_probs < 0.5
-gb_no = list(df_orig['star_ID'][idx_])
+rf_no = list(df_orig['star_ID'][idx_])
 print("Found {} variables".format(np.count_nonzero(idx)))
 
-with open('svm_results.txt', 'w') as fo:
+with open('rf_results.txt', 'w') as fo:
     for line in list(df_orig['star_ID'][idx]):
         fo.write(line + '\n')
 
@@ -122,12 +131,12 @@ with open('clean_list_of_new_variables.txt', 'r') as fo:
 news = [line.strip().split(' ')[1] for line in news]
 news = set(news)
 
-with open('svm_results.txt', 'r') as fo:
-    gb = fo.readlines()
-gb = [line.strip().split('_')[4].split('.')[0] for line in gb]
-gb = set(gb)
+with open('rf_results.txt', 'r') as fo:
+    rf = fo.readlines()
+rf = [line.strip().split('_')[4].split('.')[0] for line in rf]
+rf = set(rf)
 
-print "Among new vars found {}".format(len(news.intersection(gb)))
+print "Among new vars found {}".format(len(news.intersection(rf)))
 
 with open('candidates_50perc_threshold.txt', 'r') as fo:
     c50 = fo.readlines()
@@ -145,15 +154,15 @@ noncat_vars = set([line.strip().split(' ')[1] for line in not_in_cat if 'CST'
 
 # All variables
 all_vars = news.union(cat_vars).union(noncat_vars)
-gb_no = set([line.strip().split('_')[4].split('.')[0] for line in gb_no])
+rf_no = set([line.strip().split('_')[4].split('.')[0] for line in rf_no])
 
-found_bad = '181193' in gb
+found_bad = '181193' in rf
 print "Found known variable : ", found_bad
 
-FN = len(gb_no.intersection(all_vars))
-TP = len(all_vars.intersection(gb))
-TN = len(gb_no) - FN
-FP = len(gb) - TP
+FN = len(rf_no.intersection(all_vars))
+TP = len(all_vars.intersection(rf))
+TN = len(rf_no) - FN
+FP = len(rf) - TP
 recall = float(TP) / (TP + FN)
 precision = float(TP) / (TP + FP)
 F1 = 2 * precision * recall / (precision + recall)
@@ -162,4 +171,3 @@ print "recall: {}".format(recall)
 print "F1: {}".format(F1)
 print "TN={}, FP={}".format(TN, FP)
 print "FN={}, TP={}".format(FN, TP)
-
