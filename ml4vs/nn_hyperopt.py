@@ -8,11 +8,12 @@ from keras import callbacks
 from keras.models import Sequential
 from keras.layers import Dense
 from keras.layers import Dropout
+from keras.metrics import fbeta_score
 from keras.layers import Activation
 from keras.constraints import maxnorm
 from keras.optimizers import SGD
 from hyperas.distributions import choice, uniform, conditional, loguniform
-from sklearn.cross_validation import StratifiedShuffleSplit
+from sklearn.cross_validation import StratifiedShuffleSplit, StratifiedKFold
 from sklearn.metrics import confusion_matrix
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -41,7 +42,9 @@ X, y, df, feature_names, delta = load_data([file_0, file_1], names, names_to_del
 target = 'variable'
 predictors = list(df)
 predictors.remove(target)
+dtrain = df
 
+kfold = StratifiedKFold(dtrain[target], n_folds=4, shuffle=True, random_state=1)
 
 sss = StratifiedShuffleSplit(y, n_iter=1, test_size=0.25, random_state=123)
 for train_index, test_index in sss:
@@ -88,25 +91,49 @@ def keras_fmin_fnct(space):
     sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
               nesterov=False)
     model.compile(loss='binary_crossentropy', optimizer=sgd,
-                  metrics=['accuracy'])
+                  metrics=[fbeta_score])
 
     earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=10,
                                             verbose=1, mode='auto')
 
-    model.fit(X_train, y_train,
-              batch_size=space['batch_size'],
-              nb_epoch=400,
-              show_accuracy=True,
-              verbose=2,
-              validation_data=(X_test, y_test),
-              callbacks=[earlyStopping],
-              class_weight={0: 1, 1: space['cw']})
-    # TODO: Use CV and cross_val_score
-    # score, acc = model.evaluate(X_test, y_test, verbose=1)
-    pred = model.predict(X_test, batch_size=space['batch_size'])
-    auc = roc_auc_score(y_test, pred)
-    print('Test auc:', auc)
-    return {'loss': 1-auc, 'status': STATUS_OK, 'model': model}
+    CMs = list()
+    for train_index, test_index in kfold:
+        X_train, X_test = X[train_index], X[test_index]
+        y_train, y_test = y[train_index], y[test_index]
+
+        for name, transform in pipeline.steps:
+            transform.fit(X_train)
+            X_test = transform.transform(X_test)
+            X_train = transform.transform(X_train)
+
+        model.fit(X_train, y_train,
+                  batch_size=space['batch_size'],
+                  nb_epoch=400,
+                  show_accuracy=True,
+                  verbose=2,
+                  validation_data=(X_test, y_test),
+                  callbacks=[earlyStopping],
+                  class_weight={0: 1, 1: space['cw']})
+        # TODO: Use CV and cross_val_score
+        # score, acc = model.evaluate(X_test, y_test, verbose=1)
+        y_pred = model.predict(X_test, batch_size=space['batch_size'])
+        y_pred = [1. if y_ > 0.5 else 0. for y_ in y_pred]
+
+        CMs.append(confusion_matrix(y_test, y_pred))
+
+    CM = np.sum(CMs, axis=0)
+
+    FN = CM[1][0]
+    TP = CM[1][1]
+    FP = CM[0][1]
+    print "TP = {}".format(TP)
+    print "FP = {}".format(FP)
+    print "FN = {}".format(FN)
+
+    f1 = 2. * TP / (2. * TP + FP + FN)
+    print "F1: ", f1
+
+    return {'loss': 1-f1, 'status': STATUS_OK, 'model': model}
 
 
 space = {
