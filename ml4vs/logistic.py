@@ -8,22 +8,26 @@ from hyperopt import hp, fmin, tpe, STATUS_OK, Trials
 from sklearn.cross_validation import StratifiedKFold, cross_val_score
 from sklearn.model_selection import cross_val_predict
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import Imputer
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import Imputer, StandardScaler, FunctionTransformer,\
+    RobustScaler
 from sklearn.linear_model import LogisticRegression
 from data_load import load_data, load_data_tgt
+from sklearn.cluster import FeatureAgglomeration
 
 
-data_dir = '/home/ilya/code/ml4vs/data/LMC_SC20__corrected_list_of_variables/normalized'
-file_1 = 'vast_lightcurve_statistics_normalized_variables_only.log'
-file_0 = 'vast_lightcurve_statistics_normalized_constant_only.log'
+data_dir = '/home/ilya/code/ml4vs/data/LMC_SC20__corrected_list_of_variables/raw_index_values'
+file_1 = 'vast_lightcurve_statistics_variables_only.log'
+file_0 = 'vast_lightcurve_statistics_constant_only.log'
 file_0 = os.path.join(data_dir, file_0)
 file_1 = os.path.join(data_dir, file_1)
 names = ['Magnitude', 'clipped_sigma', 'meaningless_1', 'meaningless_2',
          'star_ID', 'weighted_sigma', 'skew', 'kurt', 'I', 'J', 'K', 'L',
          'Npts', 'MAD', 'lag1', 'RoMS', 'rCh2', 'Isgn', 'Vp2p', 'Jclp', 'Lclp',
          'Jtim', 'Ltim', 'CSSD', 'Ex', 'inv_eta', 'E_A', 'S_B', 'NXS', 'IQR']
-names_to_delete = ['Magnitude', 'meaningless_1', 'meaningless_2', 'star_ID',
+# names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
+#                    'Npts', 'CSSD', 'clipped_sigma', 'lag1', 'L', 'Lclp', 'Jclp',
+#                    'MAD', 'Ltim']
+names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
                    'Npts', 'CSSD']
 
 X, y, df, features_names, delta = load_data([file_0, file_1], names,
@@ -36,80 +40,110 @@ dtrain = df
 kfold = StratifiedKFold(dtrain[target], n_folds=4, shuffle=True, random_state=1)
 
 
+def log_axis(X_, names=None):
+    X = X_.copy()
+    tr_names = ['clipped_sigma', 'weighted_sigma', 'RoMS', 'rCh2', 'Vp2p',
+                'Ex', 'inv_eta', 'S_B']
+    for name in tr_names:
+        try:
+            # print "Log-Transforming {}".format(name)
+            i = names.index(name)
+            X[:, i] = np.log(X[:, i])
+        except ValueError:
+            print "No {} in predictors".format(name)
+            pass
+    return X
+
+
 def objective(space):
-    clf = LogisticRegression(C=space['C'], class_weight={0: 1, 1: space['cw']},
+    print "C, n_pca : {}, {}".format(space['C'], space['n_pca'])
+    clf = LogisticRegression(C=space['C'], class_weight='balanced',
                              random_state=1, max_iter=300, n_jobs=1,
                              tol=10.**(-5))
     pca = decomposition.PCA(n_components=space['n_pca'], random_state=1)
+    # ward = FeatureAgglomeration(n_clusters=space['n_clusters'])
     estimators = list()
     estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                           axis=0, verbose=2)))
+    # estimators.append(('func', FunctionTransformer(log_axis, kw_args={'names':
+    #                                                                   predictors})))
     estimators.append(('scaler', StandardScaler()))
     estimators.append(('pca', pca))
+    # estimators.append(('ward', ward))
     estimators.append(('clf', clf))
     pipeline = Pipeline(estimators)
 
-    # f1 = np.mean(cross_val_score(pipeline, X, y, cv=kfold, scoring='f1',
-    #                              verbose=1, n_jobs=4))
-    y_preds = cross_val_predict(pipeline, X, y, cv=kfold, n_jobs=4)
-    CMs = list()
-    for train_idx, test_idx in kfold:
-        CMs.append(confusion_matrix(y[test_idx], y_preds[test_idx]))
-    CM = np.sum(CMs, axis=0)
+    auc = np.mean(cross_val_score(pipeline, X, y, cv=kfold, scoring='roc_auc',
+                                  verbose=1, n_jobs=4))
+    # y_preds = cross_val_predict(pipeline, X, y, cv=kfold, n_jobs=4)
+    # CMs = list()
+    # for train_idx, test_idx in kfold:
+    #     CMs.append(confusion_matrix(y[test_idx], y_preds[test_idx]))
+    # CM = np.sum(CMs, axis=0)
 
-    FN = CM[1][0]
-    TP = CM[1][1]
-    FP = CM[0][1]
-    print "TP = {}".format(TP)
-    print "FP = {}".format(FP)
-    print "FN = {}".format(FN)
+    # FN = CM[1][0]
+    # TP = CM[1][1]
+    # FP = CM[0][1]
+    # print "TP = {}".format(TP)
+    # print "FP = {}".format(FP)
+    # print "FN = {}".format(FN)
 
-    f1 = 2. * TP / (2. * TP + FP + FN)
+    # f1 = 2. * TP / (2. * TP + FP + FN)
 
-    print "SCORE:", f1
+    print "AUC: {}".format(auc)
 
-    return{'loss': 1-f1, 'status': STATUS_OK}
+    return{'loss': 1-auc, 'status': STATUS_OK}
 
 
-space = {'C': hp.uniform('C', 1, 30),
-         'cw': hp.choice('cw', (2, 3, 4, 5, 6, 10)),
-         'n_pca': hp.choice('n_pca', (14, 15, 16, 17, 18, 19, 20))}
+space = {'C': hp.loguniform('C', -5., 4.),
+         # 'cw': hp.quniform('cw', 150, 300, 1),
+         # 'n_clusters': hp.choice('n_clusters', np.arange(3, 22, 1, dtype=int))}
+         'n_pca': hp.choice('n_pca', np.arange(3, 23, 1, dtype=int))}
 
 
 trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=500,
+            max_evals=1000,
             trials=trials)
 
 print hyperopt.space_eval(space, best)
 best_pars = hyperopt.space_eval(space, best)
 
 # Load blind test data
-file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics_normalized.log'
+file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics.log'
 file_tgt = os.path.join(data_dir, file_tgt)
 X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_delete,
                                                   delta)
 
 # Fit model on all training data
-clf = LogisticRegression(C=best_pars['C'], class_weight={0: 1,
-                                                         1: best_pars['cw']},
+clf = LogisticRegression(C=best_pars['C'], class_weight='balanced',
                          random_state=1, max_iter=300, n_jobs=1, tol=10.**(-5))
 pca = decomposition.PCA(n_components=best_pars['n_pca'], random_state=1)
+# ward = FeatureAgglomeration(n_clusters=best_pars['n_clusters'])
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
+# estimators.append(('func', FunctionTransformer(log_axis, kw_args={'names':
+#                                                                   predictors})))
 estimators.append(('scaler', StandardScaler()))
+# estimators.append(('ward', ward))
 estimators.append(('pca', pca))
 estimators.append(('clf', clf))
 pipeline = Pipeline(estimators)
 pipeline.fit(X, y)
+y_probs = pipeline.predict(X)
+from scipy.optimize import fmin
+from sklearn.metrics import f1_score
+# thresh = fmin(lambda x: 1-f1_score(y, y_probs > x), 0.75, xtol=10**(-6),
+#               ftol=10**(-6), maxiter=10**5)
+thresh = 1. - np.array(np.count_nonzero(y_probs), dtype=float) / np.count_nonzero(1. - y_probs)
 
-# Predict clases on new data
+# Predict classes on new data
 y_probs = pipeline.predict_proba(X_tgt)[:, 1]
-idx = y_probs > 0.5
-idx_ = y_probs < 0.5
+idx = y_probs > thresh
+idx_ = y_probs < thresh
 gb_no = list(df_orig['star_ID'][idx_])
 print("Found {} variables".format(np.count_nonzero(idx)))
 
