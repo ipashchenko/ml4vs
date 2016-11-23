@@ -128,7 +128,8 @@ def plot_cv_reliability(clf, X, y, n_cv=4, n_bins=4, seed=1):
         axes.plot(a, b, '.k')
     axes.set_ylim([-0.05, 1.05])
     axes.set_ylabel("Fraction of positives")
-    axes.set_ylabel("Mean predicted value")
+    axes.set_xlabel("Mean predicted value")
+    axes.legend(loc="upper left")
     plt.show()
     return fig
 
@@ -233,4 +234,46 @@ def plot_cv_pr(clf, X, y, n_cv=4, seed=1):
     plt.show()
 
     return fig
+
+
+def best_f1_thresholds(clf, X, y, n_cv=4, seed=1):
+    from sklearn.metrics import precision_recall_curve, f1_score,\
+        confusion_matrix
+    from sklearn.cross_validation import StratifiedKFold
+
+    cv = StratifiedKFold(y, n_folds=n_cv, shuffle=True, random_state=seed)
+    cv_threshs = list()
+    cv_probas = list()
+    CMs = list()
+    for train_idx, test_idx in cv:
+        probas = clf.fit(X[train_idx], y[train_idx]).predict_proba(X[test_idx])
+        cv_probas.append(probas[:, 1])
+        pr, rec, threshs = precision_recall_curve(y[test_idx], probas[:, 1])
+        f1 = [f1_score(y[test_idx], np.array(probas[:, 1] > thresh, dtype=int))
+              for thresh in threshs]
+        f1_max = max(f1)
+        idx = f1.index(f1_max)
+        thresh_max = threshs[idx]
+        cv_threshs.append(thresh_max)
+        print "Maximum F1={} for threshold={}".format(f1_max, thresh_max)
+    best_thresh = np.mean(cv_threshs)
+    for (train_idx, test_idx), cv_proba in zip(cv, cv_probas):
+        preds = np.array(cv_proba > best_thresh, dtype=int)
+        CMs.append(confusion_matrix(y[test_idx], preds))
+
+    CM = np.sum(CMs, axis=0)
+    FN = CM[1][0]
+    TP = CM[1][1]
+    FP = CM[0][1]
+    print "TP = {}".format(TP)
+    print "FP = {}".format(FP)
+    print "FN = {}".format(FN)
+    f1 = 2. * TP / (2. * TP + FP + FN)
+    P = float(TP) / (TP + FP)
+    R = float(TP) / (TP + FN)
+    print "P={}".format(P)
+    print "R={}".format(R)
+    print "F1={}".format(f1)
+
+    return best_thresh, f1
 
