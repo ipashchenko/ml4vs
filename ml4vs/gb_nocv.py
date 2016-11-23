@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import numpy as np
+from sklearn.metrics import confusion_matrix
 from sklearn.metrics import f1_score
 from sklearn.metrics import roc_auc_score, f1_score
 import xgboost as xgb
@@ -12,17 +13,20 @@ from data_load import load_data, load_data_tgt
 
 
 # Load data
-data_dir = '/home/ilya/code/ml4vs/data/LMC_SC20__corrected_list_of_variables/normalized'
-file_1 = 'vast_lightcurve_statistics_normalized_variables_only.log'
-file_0 = 'vast_lightcurve_statistics_normalized_constant_only.log'
+data_dir = '/home/ilya/code/ml4vs/data/LMC_SC20__corrected_list_of_variables/raw_index_values'
+file_1 = 'vast_lightcurve_statistics_variables_only.log'
+file_0 = 'vast_lightcurve_statistics_constant_only.log'
 file_0 = os.path.join(data_dir, file_0)
 file_1 = os.path.join(data_dir, file_1)
 names = ['Magnitude', 'clipped_sigma', 'meaningless_1', 'meaningless_2',
          'star_ID', 'weighted_sigma', 'skew', 'kurt', 'I', 'J', 'K', 'L',
          'Npts', 'MAD', 'lag1', 'RoMS', 'rCh2', 'Isgn', 'Vp2p', 'Jclp', 'Lclp',
          'Jtim', 'Ltim', 'CSSD', 'Ex', 'inv_eta', 'E_A', 'S_B', 'NXS', 'IQR']
-names_to_delete = ['Magnitude', 'meaningless_1', 'meaningless_2', 'star_ID',
-                   'Npts', 'CSSD']
+# names_to_delete = ['Magnitude', 'meaningless_1', 'meaningless_2', 'star_ID',
+#                    'Npts', 'CSSD']
+names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
+                   'Npts', 'CSSD', 'clipped_sigma', 'lag1', 'L', 'Lclp', 'Jclp',
+                   'MAD', 'Ltim']
 
 X, y, df, features_names, delta = load_data([file_0, file_1], names, names_to_delete)
 target = 'variable'
@@ -59,18 +63,22 @@ def objective(space):
     estimators.append(('clf', clf))
     pipeline = Pipeline(estimators)
 
-    f1_scores = list()
     best_n = ""
+    CMs = list()
     for train_indx, test_indx in kfold.split(dtrain[predictors].index,
                                              dtrain['variable']):
         train = dtrain.iloc[train_indx]
         valid = dtrain.iloc[test_indx]
 
+        # X_test
         valid_ = valid[predictors]
+        # X_train
         train_ = train[predictors]
         for name, transform in pipeline.steps[:-1]:
             transform.fit(train_)
+            # X_test
             valid_ = transform.transform(valid_)
+            # X_train
             train_ = transform.transform(train_)
 
         eval_set = [(train_, train['variable']),
@@ -80,16 +88,24 @@ def objective(space):
                      # clf__eval_set=eval_set, clf__eval_metric="auc",
                      clf__eval_set=eval_set, clf__eval_metric=xg_f1,
                      clf__early_stopping_rounds=50)
-        best_f1_score = 1-clf.best_score
 
-        # pred = pipeline.predict_proba(valid[predictors])[:, 1]
-        # auc = roc_auc_score(valid['variable'], pred)
-        # scores.append(auc)
-        f1_scores.append(best_f1_score)
+        pred = pipeline.predict(valid[predictors])
+        CMs.append(confusion_matrix(y[test_indx], pred))
         best_n = best_n + " " + str(clf.best_ntree_limit)
-    print "SCORE:", np.mean(f1_scores)
 
-    return{'loss': 1-np.mean(f1_scores), 'status': STATUS_OK ,
+    CM = np.sum(CMs, axis=0)
+
+    FN = CM[1][0]
+    TP = CM[1][1]
+    FP = CM[0][1]
+    print "TP = {}".format(TP)
+    print "FP = {}".format(FP)
+    print "FN = {}".format(FN)
+
+    f1 = 2. * TP / (2. * TP + FP + FN)
+    print "F1 : {}".format(f1)
+
+    return{'loss': 1-f1, 'status': STATUS_OK ,
            'attachments': {'best_n': best_n}}
 
 
@@ -120,15 +136,15 @@ best_pars = hyperopt.space_eval(space, best)
 best_n = trials.attachments['ATTACH::{}::best_n'.format(trials.best_trial['tid'])]
 best_n = max([int(n) for n in best_n.strip().split(' ')])
 
-clf = xgb.XGBClassifier(n_estimators=1000,
-                        learning_rate=0.03,
+clf = xgb.XGBClassifier(n_estimators=int(1.25 * best_n),
+                        learning_rate=best_pars['lr'],
                         max_depth=best_pars['max_depth'],
                         min_child_weight=best_pars['min_child_weight'],
                         subsample=best_pars['subsample'],
                         colsample_bytree=best_pars['colsample_bytree'],
                         colsample_bylevel=best_pars['colsample_bylevel'],
                         gamma=best_pars['gamma'],
-                        scale_pos_weight=50.)
+                        scale_pos_weight=best_pars['scale_pos_weight'])
 
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
@@ -140,7 +156,7 @@ pipeline = Pipeline(estimators)
 pipeline.fit(dtrain[predictors], dtrain['variable'])
 
 # Load blind test data
-file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics_normalized.log'
+file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics.log'
 file_tgt = os.path.join(data_dir, file_tgt)
 X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_delete,
                                                   delta)
