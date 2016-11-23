@@ -2,6 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sea
+from sklearn.calibration import calibration_curve
 
 
 def plot_corr(df, size=10):
@@ -15,9 +16,13 @@ def plot_corr(df, size=10):
 
     corr = df.corr()
     fig, ax = plt.subplots(figsize=(size, size))
-    ax.matshow(corr)
-    plt.xticks(range(len(corr.columns)), corr.columns)
-    plt.yticks(range(len(corr.columns)), corr.columns)
+    mask = np.zeros_like(corr, dtype=np.bool)
+    mask[np.triu_indices_from(mask)] = True
+    m = ax.matshow(np.ma.array(corr, mask=mask))
+    cbar = fig.colorbar(m, ticks=[-1, 1])
+    cbar.ax.set_yticklabels([-1, 0, 1])
+    plt.xticks(range(len(corr.columns)), corr.columns, rotation=45)
+    plt.yticks(range(len(corr.columns)), corr.columns, rotation=45)
 
 
 def plot_corr_matrix(corr_matrix):
@@ -61,15 +66,171 @@ def deviance_plot(est, X_test, y_test, ax=None, label='', train_color='#2c7bb6',
     return test_dev, ax
 
 
-def plot_importance(est, names, outfile):
+def plot_importance(est, names):
     # sort importances
     indices = np.argsort(est.feature_importances_)
     # plot as bar chart
-    plt.barh(np.arange(len(names)), est.feature_importances_[indices])
-    plt.yticks(np.arange(len(names)) + 0.25, np.array(names)[indices])
-    _ = plt.xlabel('Relative importance')
-    plt.savefig(outfile, bbox_inches='tight', dpi=500)
-    plt.close()
+    fig, ax = plt.subplots()
+    ax.barh(np.arange(len(names)), est.feature_importances_[indices])
+    ax.set_yticks(np.arange(len(names)) + 0.25)
+    ax.set_yticklabels(np.array(names)[indices])
+    ax.set_xlabel('Relative importance')
+    fig.show()
+    return fig
 
 
+def plot_features_hist(X, names, bins=100):
+    for i, name in enumerate(names):
+        fig = plt.figure()
+        ax = plt.gca()
+        ax.hist(X[:, i], bins=bins)
+        ax.set_xlabel("X_{}".format(i))
+        fig.savefig("X_{}_hist.png".format(i))
+        fig.close()
+
+
+def plot_reliability_curve(y_true, y_prob, fig_index=None, n_bins=5):
+    from sklearn.calibration import calibration_curve
+    b, a = calibration_curve(y_true, y_prob, n_bins=n_bins, normalize=True)
+
+    fig = plt.figure(fig_index, figsize=(10, 10))
+    ax1 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
+    ax2 = plt.subplot2grid((3, 1), (2, 0))
+    ax1.plot([0, 1], [0, 1], "k:", label="Perfectly calibrated")
+    ax1.plot(a, b, '.k')
+    ax1.plot(a, b)
+    ax1.set_ylabel("Fraction of positives")
+    ax1.set_ylim([-0.05, 1.05])
+    prob_pos = (y_prob - y_prob.min()) / (y_prob.max() - y_prob.min())
+    ax2.hist(prob_pos, n_bins, range=[0, 1], lw=2)
+    ax2.set_ylabel("Count")
+    ax2.set_xlabel("Mean predicted value")
+    plt.tight_layout()
+    return fig
+
+
+def plot_cv_reliability(clf, X, y, n_cv=4, n_bins=4, seed=1):
+    from itertools import cycle
+    from sklearn.model_selection import StratifiedKFold
+
+    colors = cycle(['cyan', 'indigo', 'seagreen', 'yellow', 'blue',
+                    'darkorange'])
+
+    fig, axes = plt.subplots(1, 1)
+    axes.plot([0, 1], [0, 1], "k:", label="Perfectly calibrated")
+
+    cv = StratifiedKFold(n_splits=n_cv, shuffle=True, random_state=seed)
+    for (train, test), color in zip(cv.split(X, y), colors):
+        probas_ = clf.fit(X[train], y[train]).predict_proba(X[test])[:, 1]
+        b, a = calibration_curve(y[test], probas_, n_bins=n_bins,
+                                 normalize=True)
+        axes.plot(a, b, color=color)
+        axes.plot(a, b, '.k')
+    axes.set_ylim([-0.05, 1.05])
+    axes.set_ylabel("Fraction of positives")
+    axes.set_ylabel("Mean predicted value")
+    plt.show()
+    return fig
+
+
+def plot_cv_roc(clf, X, y, n_cv=4, seed=1):
+    from itertools import cycle
+    from sklearn.metrics import roc_curve, auc
+    from sklearn.model_selection import StratifiedKFold
+    from scipy import interp
+
+    colors = cycle(['cyan', 'indigo', 'seagreen', 'yellow', 'blue',
+                    'darkorange'])
+    lw = 2
+
+    i = 0
+    mean_tpr = 0.0
+    mean_fpr = np.linspace(0, 1, 100)
+    fig = plt.figure()
+
+    cv = StratifiedKFold(n_splits=n_cv, shuffle=True, random_state=seed)
+    for (train, test), color in zip(cv.split(X, y), colors):
+        probas_ = clf.fit(X[train], y[train]).predict_proba(X[test])
+        # Compute ROC curve and area the curve
+        fpr, tpr, thresholds = roc_curve(y[test], probas_[:, 1])
+        mean_tpr += interp(mean_fpr, fpr, tpr)
+        mean_tpr[0] = 0.0
+        roc_auc = auc(fpr, tpr)
+        plt.plot(fpr, tpr, lw=lw, color=color,
+                 label='ROC fold %d (area = %0.2f)' % (i, roc_auc))
+
+        i += 1
+    plt.plot([0, 1], [0, 1], linestyle='--', lw=lw, color='k',
+             label='Luck')
+
+    mean_tpr /= cv.get_n_splits(X, y)
+    mean_tpr[-1] = 1.0
+    mean_auc = auc(mean_fpr, mean_tpr)
+    plt.plot(mean_fpr, mean_tpr, color='g', linestyle='--',
+             label='Mean ROC (area = %0.2f)' % mean_auc, lw=lw)
+
+    plt.xlim([-0.05, 1.05])
+    plt.ylim([-0.05, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC')
+    plt.legend(loc="lower right")
+    plt.show()
+
+    return fig
+
+
+def plot_cv_pr(clf, X, y, n_cv=4, seed=1):
+    """
+    This averages P for the same values of R.
+
+    :param clf:
+    :param X:
+    :param y:
+    :param n_cv:
+    :param seed:
+    :return:
+    """
+    from itertools import cycle
+    from sklearn.metrics import precision_recall_curve, auc, average_precision_score
+    from sklearn.model_selection import StratifiedKFold
+    from scipy import interp
+
+    colors = cycle(['cyan', 'indigo', 'seagreen', 'yellow', 'blue',
+                    'darkorange'])
+    lw = 2
+
+    i = 0
+    mean_pr = 0.0
+    mean_rec = np.linspace(0, 1, 100)[::-1]
+    fig = plt.figure()
+
+    cv = StratifiedKFold(n_splits=n_cv, shuffle=True, random_state=seed)
+    for (train, test), color in zip(cv.split(X, y), colors):
+        probas_ = clf.fit(X[train], y[train]).predict_proba(X[test])
+        # Compute PR curve and area the curve
+        # fpr, tpr, thresholds = precision_recall_curve(y[test], probas_[:, 1])
+        pr, rec, thresholds = precision_recall_curve(y[test], probas_[:, 1])
+        mean_pr += interp(mean_rec, rec[::-1], pr[::-1])[::-1]
+        pr_auc = average_precision_score(y[test], probas_[:, 1])
+        plt.plot(rec, pr, lw=lw, color=color,
+                 label='PR-curve fold %d (area = %0.2f)' % (i, pr_auc))
+        i += 1
+
+    mean_pr /= cv.get_n_splits(X, y)
+    mean_pr[-1] = 0.0
+    mean_pr[0] = 1.0
+    mean_auc = auc(mean_rec, mean_pr, reorder=True)
+    plt.plot(mean_rec[::-1], mean_pr, color='g', linestyle='--',
+             label='Mean PR-curve (area = %0.2f)' % mean_auc, lw=lw)
+
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('PR-curve')
+    plt.legend(loc="lower left")
+    plt.show()
+
+    return fig
 
