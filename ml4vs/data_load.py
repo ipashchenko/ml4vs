@@ -54,8 +54,8 @@ def load_data(fnames, names, names_to_delete):
 
     # Concatenate dfs
     df = pd.concat(dfs, axis=0)
-    df['boolNXS'] = np.array(df['NXS'] == 0, dtype=int)
-    df = pd.get_dummies(df, columns=['boolNXS'])
+    # df['boolNXS'] = np.array(df['NXS'] == 0, dtype=int)
+    # df = pd.get_dummies(df, columns=['boolNXS'])
     features_names = list(df)
 
     # Convert to numpy arrays
@@ -101,8 +101,8 @@ def load_data_tgt(fname, names, names_to_delete, delta):
                                               df[feature].isnull().sum()))
     print("=======================")
 
-    df['boolNXS'] = np.array(df['NXS'] == 0, dtype=int)
-    df = pd.get_dummies(df, columns=['boolNXS'])
+    # df['boolNXS'] = np.array(df['NXS'] == 0, dtype=int)
+    # df = pd.get_dummies(df, columns=['boolNXS'])
     features_names = list(df)
 
     # Convert to numpy arrays
