@@ -15,17 +15,20 @@ from sklearn.preprocessing import StandardScaler
 from data_load import load_data, load_data_tgt
 
 
-data_dir = '/home/ilya/code/ml4vs/data/LMC_SC20__corrected_list_of_variables/normalized'
-file_1 = 'vast_lightcurve_statistics_normalized_variables_only.log'
-file_0 = 'vast_lightcurve_statistics_normalized_constant_only.log'
+data_dir = '/home/ilya/code/ml4vs/data/LMC_SC20__corrected_list_of_variables/raw_index_values'
+file_1 = 'vast_lightcurve_statistics_variables_only.log'
+file_0 = 'vast_lightcurve_statistics_constant_only.log'
 file_0 = os.path.join(data_dir, file_0)
 file_1 = os.path.join(data_dir, file_1)
 names = ['Magnitude', 'clipped_sigma', 'meaningless_1', 'meaningless_2',
          'star_ID', 'weighted_sigma', 'skew', 'kurt', 'I', 'J', 'K', 'L',
          'Npts', 'MAD', 'lag1', 'RoMS', 'rCh2', 'Isgn', 'Vp2p', 'Jclp', 'Lclp',
          'Jtim', 'Ltim', 'CSSD', 'Ex', 'inv_eta', 'E_A', 'S_B', 'NXS', 'IQR']
-names_to_delete = ['Magnitude', 'meaningless_1', 'meaningless_2', 'star_ID',
-                   'Npts', 'CSSD']
+# names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
+#                    'Npts', 'CSSD']
+names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
+                   'Npts', 'CSSD', 'clipped_sigma', 'lag1', 'L', 'Lclp', 'Jclp',
+                   'MAD', 'Ltim']
 
 X, y, df, features_names, delta = load_data([file_0, file_1], names,
                                             names_to_delete)
@@ -38,42 +41,40 @@ kfold = StratifiedKFold(dtrain[target], n_folds=4, shuffle=True, random_state=1)
 
 
 def objective(space):
-    print "C, gamma, npca : {}, {}, {}".format(space['C'], space['gamma'],
-                                               space['n_pca'])
+    print "C, gamma : {}, {}".format(space['C'], space['gamma'])
     clf = SVC(C=space['C'], class_weight='balanced', probability=False,
               gamma=space['gamma'], random_state=1)
-    pca = decomposition.PCA(n_components=space['n_pca'], random_state=1)
+    # pca = decomposition.PCA(n_components=space['n_pca'], random_state=1)
     estimators = list()
     estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                           axis=0, verbose=2)))
     estimators.append(('scaler', StandardScaler()))
-    estimators.append(('pca', pca))
+    # estimators.append(('pca', pca))
     estimators.append(('clf', clf))
     pipeline = Pipeline(estimators)
 
-    # f1 = np.mean(cross_val_score(pipeline, X, y, cv=kfold, scoring='f1',
-    #                              verbose=1, n_jobs=4))
-    y_preds = cross_val_predict(pipeline, X, y, cv=kfold, n_jobs=4)
-    CMs = list()
-    for train_idx, test_idx in kfold:
-        CMs.append(confusion_matrix(y[test_idx], y_preds[test_idx]))
-    CM = np.sum(CMs, axis=0)
+    auc = np.mean(cross_val_score(pipeline, X, y, cv=kfold, scoring='roc_auc',
+                                  verbose=1, n_jobs=4))
+    # y_preds = cross_val_predict(pipeline, X, y, cv=kfold, n_jobs=4)
+    # CMs = list()
+    # for train_idx, test_idx in kfold:
+    #     CMs.append(confusion_matrix(y[test_idx], y_preds[test_idx]))
+    # CM = np.sum(CMs, axis=0)
 
-    FN = CM[1][0]
-    TP = CM[1][1]
-    FP = CM[0][1]
-    print "TP = {}".format(TP)
-    print "FP = {}".format(FP)
-    print "FN = {}".format(FN)
+    # FN = CM[1][0]
+    # TP = CM[1][1]
+    # FP = CM[0][1]
+    # print "TP = {}".format(TP)
+    # print "FP = {}".format(FP)
+    # print "FN = {}".format(FN)
 
-    f1 = 2. * TP / (2. * TP + FP + FN)
-    print "SCORE:", f1
+    # f1 = 2. * TP / (2. * TP + FP + FN)
+    print "AUC : ", auc
 
-    return{'loss': 1-f1, 'status': STATUS_OK}
+    return{'loss': 1-auc, 'status': STATUS_OK}
 
 space = {'C': hp.loguniform('C', -6, 4),
-         'gamma': hp.loguniform('gamma', -6, 4),
-         'n_pca': hp.choice('n_pca', (12, 13, 14, 15, 16, 17, 18, 19, 20))}
+         'gamma': hp.loguniform('gamma', -6, 4)}
 
 
 trials = Trials()
@@ -87,7 +88,7 @@ print hyperopt.space_eval(space, best)
 best_pars = hyperopt.space_eval(space, best)
 
 # Load blind test data
-file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics_normalized.log'
+file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics.log'
 file_tgt = os.path.join(data_dir, file_tgt)
 X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_delete,
                                                   delta)
@@ -95,12 +96,12 @@ X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_dele
 # Fit model on all training data
 clf = SVC(C=best_pars['C'], class_weight='balanced', probability=True,
           gamma=best_pars['gamma'], random_state=1)
-pca = decomposition.PCA(n_components=best_pars['n_pca'], random_state=1)
+# pca = decomposition.PCA(n_components=best_pars['n_pca'], random_state=1)
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
 estimators.append(('scaler', StandardScaler()))
-estimators.append(('pca', pca))
+# estimators.append(('pca', pca))
 estimators.append(('clf', clf))
 pipeline = Pipeline(estimators)
 pipeline.fit(X, y)
