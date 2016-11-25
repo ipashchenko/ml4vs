@@ -236,7 +236,7 @@ def plot_cv_pr(clf, X, y, n_cv=4, seed=1, fit_params=None):
     return fig
 
 
-def best_f1_thresholds(clf, X, y, n_cv=4, seed=1):
+def best_f1_thresholds(clf, X, y, n_cv=4, seed=1, fit_params=None):
     from sklearn.metrics import precision_recall_curve, f1_score,\
         confusion_matrix
     from sklearn.cross_validation import StratifiedKFold
@@ -246,10 +246,18 @@ def best_f1_thresholds(clf, X, y, n_cv=4, seed=1):
     cv_probas = list()
     CMs = list()
     for train_idx, test_idx in cv:
-        probas = clf.fit(X[train_idx], y[train_idx]).predict_proba(X[test_idx])
-        cv_probas.append(probas[:, 1])
-        pr, rec, threshs = precision_recall_curve(y[test_idx], probas[:, 1])
-        f1 = [f1_score(y[test_idx], np.array(probas[:, 1] > thresh, dtype=int))
+        clf.fit(X[train_idx], y[train_idx], **fit_params)
+        probas = clf.predict_proba(X[test_idx])
+        # Scikit-learn
+        try:
+            probas = probas[:, 1]
+        # Keras
+        except IndexError:
+            probas = probas[:, 0]
+        # probas = clf.fit(X[train_idx], y[train_idx]).predict_proba(X[test_idx])
+        cv_probas.append(probas)
+        pr, rec, threshs = precision_recall_curve(y[test_idx], probas)
+        f1 = [f1_score(y[test_idx], np.array(probas > thresh, dtype=int))
               for thresh in threshs]
         f1_max = max(f1)
         idx = f1.index(f1_max)
