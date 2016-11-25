@@ -23,21 +23,20 @@ from utils import print_cm_summary
 from data_load import load_data, load_data_tgt
 
 
-data_dir = '/home/ilya/code/ml4vs/data/dataset_OGLE/indexes_normalized'
-file_1 = 'vast_lightcurve_statistics_normalized_variables_only.log'
-file_0 = 'vast_lightcurve_statistics_normalized_constant_only.log'
+data_dir = '/home/ilya/code/ml4vs/data/LMC_SC20__corrected_list_of_variables/raw_index_values'
+file_1 = 'vast_lightcurve_statistics_variables_only.log'
+file_0 = 'vast_lightcurve_statistics_constant_only.log'
 file_0 = os.path.join(data_dir, file_0)
 file_1 = os.path.join(data_dir, file_1)
 names = ['Magnitude', 'clipped_sigma', 'meaningless_1', 'meaningless_2',
          'star_ID', 'weighted_sigma', 'skew', 'kurt', 'I', 'J', 'K', 'L',
          'Npts', 'MAD', 'lag1', 'RoMS', 'rCh2', 'Isgn', 'Vp2p', 'Jclp', 'Lclp',
          'Jtim', 'Ltim', 'CSSD', 'Ex', 'inv_eta', 'E_A', 'S_B', 'NXS', 'IQR']
-names_to_delete = ['Magnitude', 'meaningless_1', 'meaningless_2', 'star_ID',
-                   'Npts', 'CSSD']
 # names_to_delete = ['Magnitude', 'meaningless_1', 'meaningless_2', 'star_ID',
-#                    'Npts', 'CSSD', 'Lclp', 'J', 'Jclp', 'rCh2', 'NXS', 'Ex',
-#                    'inv_eta', 'weighted_sigma', 'Jtim',
-#                    'Vp2p', 'E_A', 'kurt', 'K', 'Isgn', 'IQR']
+#                    'Npts', 'CSSD']
+names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
+                   'Npts', 'CSSD', 'clipped_sigma', 'lag1', 'L', 'Lclp', 'Jclp',
+                   'MAD', 'Ltim']
 X, y, df, feature_names, delta = load_data([file_0, file_1], names, names_to_delete)
 target = 'variable'
 predictors = list(df)
@@ -68,8 +67,26 @@ def auc(y_true, y_pred):
 
 
 def keras_fmin_fnct(space):
+    print "Using hyperparameters ================================"
+    if not space['use_3_layers']:
+        print "2 layers, 18 - {} neurons".format(space['Dense'])
+        print "Dropouts: {} - {}".format(space['Dropout'], space['Dropout_1'])
+        print "W_constraints: {} - {}".format(space['w1'], space['w2'])
+        print "LR = {}, Momentum = {}".format(space['lr'], space['momentum'])
+        print "Batch size = {}".format(space['batch_size'])
+        print "Class weight = {}".format(space['cw'])
+    elif space['use_3_layers']:
+        print "3 layers, 18 - {} - {} neurons".format(space['Dense'], space['use_3_layers']['Dense_2'])
+        print "Dropouts: {} - {} - {}".format(space['Dropout'], space['Dropout_1'],
+                                            space['use_3_layers']['Dropout_2'])
+        print "W_constraints: {} - {} - {}".format(space['w1'], space['w2'],
+                                                 space['use_3_layers']['w3'])
+        print "LR = {}, Momentum = {}".format(space['lr'], space['momentum'])
+        print "Batch size = {}".format(space['batch_size'])
+        print "Class weight = {}".format(space['cw'])
+    print "=============================================="
     model = Sequential()
-    model.add(Dense(24, input_dim=24, init='normal', activation='relu',
+    model.add(Dense(18, input_dim=18, init='normal', activation='relu',
                     W_constraint=maxnorm(space['w1'])))
     model.add(Dropout(space['Dropout']))
     model.add(Dense(space['Dense'], init='normal', activation='relu',
@@ -77,11 +94,16 @@ def keras_fmin_fnct(space):
     # model.add(Activation(space['Activation']))
     model.add(Dropout(space['Dropout_1']))
 
-    if conditional(space['conditional']) == 'three':
-        model.add(Dense(12, activation='relu',
-                        W_constraint=maxnorm(space['w3']),
+    # if conditional(space['conditional']) == 'three':
+    #     model.add(Dense(space['Dense_2'], activation='relu',
+    #                     W_constraint=maxnorm(space['w3']),
+    #                     init='normal'))
+    #     model.add(Dropout(space['Dropout_2']))
+    if space['use_3_layers']:
+        model.add(Dense(space['use_3_layers']['Dense_2'], activation='relu',
+                        W_constraint=maxnorm(space['use_3_layers']['w3']),
                         init='normal'))
-        model.add(Dropout(space['Dropout_2']))
+        model.add(Dropout(space['use_3_layers']['Dropout_2']))
     model.add(Dense(1, init='normal', activation='sigmoid'))
 
     # Compile model
@@ -91,9 +113,11 @@ def keras_fmin_fnct(space):
     sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
               nesterov=False)
     model.compile(loss='binary_crossentropy', optimizer=sgd,
-                  metrics=[fbeta_score])
+                  metrics=['accuracy'])
 
-    earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=10,
+    # earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=10,
+    #                                         verbose=1, mode='auto')
+    earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=50,
                                             verbose=1, mode='auto')
 
     CMs = list()
@@ -137,27 +161,31 @@ def keras_fmin_fnct(space):
 
 
 space = {
-        'Dropout': hp.choice('Dropout', [0.42]),
-        'Dense': hp.choice('Dense', [24]),
-        # 'Activation': hp.choice('Activation', ['relu', 'sigmoid']),
-        'Dropout_1': hp.choice('Dropout_1', [0.3]),
-        'conditional': hp.choice('conditional', ['three']),
-        'Dropout_2': hp.choice('Dropout_2', [0.56]),
-        # 'optimizer': hp.choice('optimizer', ['rmsprop', 'adam', 'sgd']),
-        'lr': hp.choice('lr', [0.075]),
-        'w1': hp.choice('w1', [5]),
-        'w2': hp.choice('w2', [3]),
-        'w3': hp.choice('w3', [3]),
-        'cw': hp.choice('cw', [2,3,4,5,6,7,8]),
-        'momentum': hp.choice('momentum', [0.825]),
-        'batch_size': hp.choice('batch_size', [256]),
+        'Dropout': hp.uniform('Dropout', 0., 1.),
+        'Dense': hp.choice('Dense', (9, 18, 36)),
+        'Dropout_1': hp.uniform('Dropout_1', 0., 1.),
+        # 'conditional': hp.choice('conditional', [{'n_layers': 'two'},
+        #                                          {'n_layes': 'three',
+        #                                           'Dense_2': hp.choice('Dense_2', (9, 18, 36)),
+        #                                           'Dropout_2': hp.uniform('Dropout_2', 0., 1.),
+        #                                           'w3': hp.choice('w3', (1, 2, 3, 5, 7))}]),
+        'use_3_layers': hp.choice('use_3_layers', [False,
+                                                   {'Dense_2': hp.choice('Dense_2', (9, 18, 36)),
+                                                    'Dropout_2': hp.uniform('Dropout_2', 0., 1.),
+                                                    'w3': hp.choice('w3', (1, 2, 3, 5, 7))}]),
+        'lr': hp.loguniform('lr', -4.6, -0.7),
+        'w1': hp.choice('w1', (1, 2, 3, 5, 7)),
+        'w2': hp.choice('w2', (1, 2, 3, 5, 7)),
+        'momentum': hp.quniform('momentum', 0.5, 0.975, 0.025),
+        'cw': hp.qloguniform('cw', 0, 6, 1),
+        'batch_size': hp.choice('batch_size', (14, 28, 56, 128, 256, 512))
     }
 
 trials = Trials()
 best = fmin(fn=keras_fmin_fnct,
             space=space,
             algo=tpe.suggest,
-            max_evals=30,
+            max_evals=100,
             trials=trials)
 
 print hyperopt.space_eval(space, best)
@@ -182,23 +210,45 @@ for name, transform in pipeline.steps:
     X_train = transform.transform(X_train)
 
 history = callbacks.History()
-earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=30,
+earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=100,
                                         verbose=1, mode='auto')
 
 # Build model with best parameters
 model = Sequential()
-model.add(Dense(24, input_dim=24, init='normal', activation='relu',
+model.add(Dense(18, input_dim=18, init='normal', activation='relu',
                 W_constraint=maxnorm(best_pars['w1'])))
 model.add(Dropout(best_pars['Dropout']))
 model.add(Dense(best_pars['Dense'], init='normal', activation='relu',
                 W_constraint=maxnorm(best_pars['w2'])))
 # model.add(Activation(space['Activation']))
 model.add(Dropout(best_pars['Dropout_1']))
-if conditional(best_pars['conditional']) == 'three':
-    model.add(Dense(12, activation='relu', W_constraint=maxnorm(best_pars['w3']),
+
+# if conditional(space['conditional']) == 'three':
+#     model.add(Dense(space['Dense_2'], activation='relu',
+#                     W_constraint=maxnorm(space['w3']),
+#                     init='normal'))
+#     model.add(Dropout(space['Dropout_2']))
+if best_pars['use_3_layers']:
+    model.add(Dense(best_pars['use_3_layers']['Dense_2'], activation='relu',
+                    W_constraint=maxnorm(best_pars['use_3_layers']['w3']),
                     init='normal'))
-    model.add(Dropout(best_pars['Dropout_2']))
+    model.add(Dropout(best_pars['use_3_layers']['Dropout_2']))
 model.add(Dense(1, init='normal', activation='sigmoid'))
+
+# # Build model with best parameters
+# model = Sequential()
+# model.add(Dense(18, input_dim=18, init='normal', activation='relu',
+#                 W_constraint=maxnorm(best_pars['w1'])))
+# model.add(Dropout(best_pars['Dropout']))
+# model.add(Dense(best_pars['Dense'], init='normal', activation='relu',
+#                 W_constraint=maxnorm(best_pars['w2'])))
+# # model.add(Activation(space['Activation']))
+# model.add(Dropout(best_pars['Dropout_1']))
+# if conditional(best_pars['conditional']) == 'three':
+#     model.add(Dense(12, activation='relu', W_constraint=maxnorm(best_pars['w3']),
+#                     init='normal'))
+#     model.add(Dropout(best_pars['Dropout_2']))
+# model.add(Dense(1, init='normal', activation='sigmoid'))
 
 # Compile model
 learning_rate = best_pars["lr"]
@@ -258,20 +308,43 @@ for name, transform in pipeline.steps:
     transform.fit(X)
     X = transform.transform(X)
 
+# # Build model with best parameters
+# model = Sequential()
+# model.add(Dense(18, input_dim=18, init='normal', activation='relu',
+#                 W_constraint=maxnorm(best_pars['w1'])))
+# model.add(Dropout(best_pars['Dropout']))
+# model.add(Dense(best_pars['Dense'], init='normal', activation='relu',
+#                 W_constraint=maxnorm(best_pars['w2'])))
+# # model.add(Activation(space['Activation']))
+# model.add(Dropout(best_pars['Dropout_1']))
+# if conditional(best_pars['conditional']) == 'three':
+#     model.add(Dense(12, activation='relu', W_constraint=maxnorm(best_pars['w3']),
+#                     init='normal'))
+#     model.add(Dropout(best_pars['Dropout_2']))
+# model.add(Dense(1, init='normal', activation='sigmoid'))
+
 # Build model with best parameters
 model = Sequential()
-model.add(Dense(24, input_dim=24, init='normal', activation='relu',
+model.add(Dense(18, input_dim=18, init='normal', activation='relu',
                 W_constraint=maxnorm(best_pars['w1'])))
 model.add(Dropout(best_pars['Dropout']))
 model.add(Dense(best_pars['Dense'], init='normal', activation='relu',
                 W_constraint=maxnorm(best_pars['w2'])))
 # model.add(Activation(space['Activation']))
 model.add(Dropout(best_pars['Dropout_1']))
-if conditional(best_pars['conditional']) == 'three':
-    model.add(Dense(12, activation='relu', W_constraint=maxnorm(best_pars['w3']),
+
+# if conditional(space['conditional']) == 'three':
+#     model.add(Dense(space['Dense_2'], activation='relu',
+#                     W_constraint=maxnorm(space['w3']),
+#                     init='normal'))
+#     model.add(Dropout(space['Dropout_2']))
+if best_pars['use_3_layers']:
+    model.add(Dense(best_pars['use_3_layers']['Dense_2'], activation='relu',
+                    W_constraint=maxnorm(best_pars['use_3_layers']['w3']),
                     init='normal'))
-    model.add(Dropout(best_pars['Dropout_2']))
+    model.add(Dropout(best_pars['use_3_layers']['Dropout_2']))
 model.add(Dense(1, init='normal', activation='sigmoid'))
+
 # Compile model
 learning_rate = best_pars["lr"]
 decay_rate = learning_rate / 400.
@@ -281,10 +354,10 @@ sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
 model.compile(loss='binary_crossentropy', optimizer=sgd,
               metrics=['accuracy'])
 model.fit(X, y, batch_size=best_pars['batch_size'], nb_epoch=int(1.25*n_epoch),
-          show_accuracy=True, verbose=2, class_weight={0: 1, 1: 1})
+          show_accuracy=True, verbose=2, class_weight={0: 1, 1: best_pars['cw']})
 
 # Load blind test data
-file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics_normalized.log'
+file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics.log'
 file_tgt = os.path.join(data_dir, file_tgt)
 X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_delete,
                                                   delta)

@@ -42,7 +42,7 @@ def objective(space):
                             colsample_bytree=space['colsample_bytree'],
                             colsample_bylevel=space['colsample_bylevel'],
                             gamma=space['gamma'],
-                            scale_pos_weight=space['scale_pos_weigth'], seed=1)
+                            scale_pos_weight=space['scale_pos_weight'], seed=1)
     # scale_pos_weight=space['scale_pos_weight'])
     xgb_param = clf.get_xgb_params()
     xgtrain = xgb.DMatrix(dtrain[predictors].values, label=dtrain[target].values)
@@ -93,7 +93,7 @@ clf = xgb.XGBClassifier(n_estimators=int(1.25 * best_n),
                         colsample_bytree=best_pars['colsample_bytree'],
                         colsample_bylevel=best_pars['colsample_bylevel'],
                         gamma=best_pars['gamma'],
-                        scale_pos_weight=best_pars['scale_pos_weigth'],
+                        scale_pos_weight=best_pars['scale_pos_weight'],
                         seed=1)
 
 estimators = list()
