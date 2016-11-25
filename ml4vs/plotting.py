@@ -181,16 +181,9 @@ def plot_cv_roc(clf, X, y, n_cv=4, seed=1):
     return fig
 
 
-def plot_cv_pr(clf, X, y, n_cv=4, seed=1):
+def plot_cv_pr(clf, X, y, n_cv=4, seed=1, fit_params=None):
     """
     This averages P for the same values of R.
-
-    :param clf:
-    :param X:
-    :param y:
-    :param n_cv:
-    :param seed:
-    :return:
     """
     from itertools import cycle
     from sklearn.metrics import precision_recall_curve, auc, average_precision_score
@@ -208,12 +201,19 @@ def plot_cv_pr(clf, X, y, n_cv=4, seed=1):
 
     cv = StratifiedKFold(n_splits=n_cv, shuffle=True, random_state=seed)
     for (train, test), color in zip(cv.split(X, y), colors):
-        probas_ = clf.fit(X[train], y[train]).predict_proba(X[test])
+        clf.fit(X[train], y[train], **fit_params)
+        probas_ = clf.predict_proba(X[test])
+        # Scikit-learn
+        try:
+            probas_ = probas_[:, 1]
+        # Keras
+        except IndexError:
+            probas_ = probas_[:, 0]
         # Compute PR curve and area the curve
         # fpr, tpr, thresholds = precision_recall_curve(y[test], probas_[:, 1])
-        pr, rec, thresholds = precision_recall_curve(y[test], probas_[:, 1])
+        pr, rec, thresholds = precision_recall_curve(y[test], probas_)
         mean_pr += interp(mean_rec, rec[::-1], pr[::-1])[::-1]
-        pr_auc = average_precision_score(y[test], probas_[:, 1])
+        pr_auc = average_precision_score(y[test], probas_)
         plt.plot(rec, pr, lw=lw, color=color,
                  label='PR-curve fold %d (area = %0.2f)' % (i, pr_auc))
         i += 1
