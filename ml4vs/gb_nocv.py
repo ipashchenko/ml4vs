@@ -64,7 +64,8 @@ def objective(space):
     pipeline = Pipeline(estimators)
 
     best_n = ""
-    CMs = list()
+    # CMs = list()
+    aucs = list()
     for train_indx, test_indx in kfold.split(dtrain[predictors].index,
                                              dtrain['variable']):
         train = dtrain.iloc[train_indx]
@@ -84,28 +85,32 @@ def objective(space):
         eval_set = [(train_, train['variable']),
                     (valid_, valid['variable'])]
 
+        # TODO: Try ES on default eval. metric or AUC!!!
         pipeline.fit(train[predictors], train['variable'],
-                     # clf__eval_set=eval_set, clf__eval_metric="auc",
-                     clf__eval_set=eval_set, clf__eval_metric=xg_f1,
+                     clf__eval_set=eval_set, clf__eval_metric="auc",
+                     # clf__eval_set=eval_set, clf__eval_metric=xg_f1,
                      clf__early_stopping_rounds=50)
 
-        pred = pipeline.predict(valid[predictors])
-        CMs.append(confusion_matrix(y[test_indx], pred))
+        pred = pipeline.predict_proba(valid[predictors])[:, 1]
+        auc = roc_auc_score(y[test_indx], pred)
+        aucs.append(auc)
+        # CMs.append(confusion_matrix(y[test_indx], pred))
         best_n = best_n + " " + str(clf.best_ntree_limit)
 
-    CM = np.sum(CMs, axis=0)
+    # CM = np.sum(CMs, axis=0)
 
-    FN = CM[1][0]
-    TP = CM[1][1]
-    FP = CM[0][1]
-    print "TP = {}".format(TP)
-    print "FP = {}".format(FP)
-    print "FN = {}".format(FN)
+    # FN = CM[1][0]
+    # TP = CM[1][1]
+    # FP = CM[0][1]
+    # print "TP = {}".format(TP)
+    # print "FP = {}".format(FP)
+    # print "FN = {}".format(FN)
 
-    f1 = 2. * TP / (2. * TP + FP + FN)
-    print "F1 : {}".format(f1)
+    # f1 = 2. * TP / (2. * TP + FP + FN)
+    AUC = np.mean(aucs)
+    print "AUC : {}".format(AUC)
 
-    return{'loss': 1-f1, 'status': STATUS_OK ,
+    return{'loss': 1-AUC, 'status': STATUS_OK ,
            'attachments': {'best_n': best_n}}
 
 
@@ -113,10 +118,10 @@ space ={
     'max_depth': hp.choice("x_max_depth", np.arange(5, 12, 1, dtype=int)),
     'min_child_weight': hp.quniform('x_min_child', 1, 20, 2),
     'subsample': hp.quniform('x_subsample', 0.5, 1, 0.05),
-    'colsample_bytree': hp.quniform('x_csbtree', 0.5, 1, 0.05),
-    'colsample_bylevel': hp.quniform('x_csblevel', 0.5, 1, 0.05),
+    'colsample_bytree': hp.quniform('x_csbtree', 0.25, 1, 0.05),
+    'colsample_bylevel': hp.quniform('x_csblevel', 0.25, 1, 0.05),
     'gamma': hp.quniform('x_gamma', 0.0, 1, 0.05),
-    'scale_pos_weight': hp.quniform('x_spweight', 1, 303, 50),
+    'scale_pos_weight': hp.qloguniform('x_spweight', 0, 6, 1),
     'lr': hp.quniform('lr', 0.001, 0.5, 0.025)
     # 'lr': hp.loguniform('lr', -7, -1)
 }
@@ -126,7 +131,7 @@ trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=300,
+            max_evals=500,
             trials=trials)
 
 import hyperopt
@@ -162,8 +167,8 @@ X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_dele
                                                   delta)
 
 y_probs = pipeline.predict_proba(df[predictors])[:, 1]
-idx = y_probs > 0.5
-idx_ = y_probs < 0.5
+idx = y_probs > 0.65
+idx_ = y_probs < 0.65
 gb_no = list(df_orig['star_ID'][idx_])
 print("Found {} variables".format(np.count_nonzero(idx)))
 

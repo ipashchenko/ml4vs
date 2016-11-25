@@ -10,19 +10,18 @@ from data_load import load_data, load_data_tgt
 
 
 # Load data
-data_dir = '/home/ilya/code/ml4vs/data/dataset_OGLE/indexes_normalized'
-file_1 = 'vast_lightcurve_statistics_normalized_variables_only.log'
-file_0 = 'vast_lightcurve_statistics_normalized_constant_only.log'
+data_dir = '/home/ilya/code/ml4vs/data/LMC_SC20__corrected_list_of_variables/raw_index_values'
+file_1 = 'vast_lightcurve_statistics_variables_only.log'
+file_0 = 'vast_lightcurve_statistics_constant_only.log'
 file_0 = os.path.join(data_dir, file_0)
 file_1 = os.path.join(data_dir, file_1)
 names = ['Magnitude', 'clipped_sigma', 'meaningless_1', 'meaningless_2',
          'star_ID', 'weighted_sigma', 'skew', 'kurt', 'I', 'J', 'K', 'L',
          'Npts', 'MAD', 'lag1', 'RoMS', 'rCh2', 'Isgn', 'Vp2p', 'Jclp', 'Lclp',
          'Jtim', 'Ltim', 'CSSD', 'Ex', 'inv_eta', 'E_A', 'S_B', 'NXS', 'IQR']
-names_to_delete = ['Magnitude', 'meaningless_1', 'meaningless_2', 'star_ID',
-                   'Npts', 'CSSD', 'Lclp', 'J', 'Jclp', 'rCh2', 'NXS', 'Ex',
-                   'inv_eta', 'weighted_sigma', 'Jtim',
-                   'Vp2p', 'E_A', 'kurt', 'K', 'Isgn', 'IQR']
+names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
+                   'Npts', 'CSSD', 'clipped_sigma', 'lag1', 'L', 'Lclp', 'Jclp',
+                   'MAD', 'Ltim']
 
 X, y, df, features_names, delta = load_data([file_0, file_1], names, names_to_delete)
 target = 'variable'
@@ -32,18 +31,18 @@ dtrain = df
 
 
 kfold = StratifiedKFold(dtrain[target], n_folds=4, shuffle=True,
-                        random_state=123)
+                        random_state=1)
 
 
 def objective(space):
-    clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=0.025,
+    clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=space['lr'],
                             max_depth=space['max_depth'],
                             min_child_weight=space['min_child_weight'],
                             subsample=space['subsample'],
                             colsample_bytree=space['colsample_bytree'],
                             colsample_bylevel=space['colsample_bylevel'],
                             gamma=space['gamma'],
-                            scale_pos_weight=200., seed=123)
+                            scale_pos_weight=space['scale_pos_weigth'], seed=1)
     # scale_pos_weight=space['scale_pos_weight'])
     xgb_param = clf.get_xgb_params()
     xgtrain = xgb.DMatrix(dtrain[predictors].values, label=dtrain[target].values)
@@ -51,9 +50,9 @@ def objective(space):
                       num_boost_round=clf.get_params()['n_estimators'],
                       folds=kfold, metrics='auc',
                       early_stopping_rounds=50, verbose_eval=True,
-                      as_pandas=False, seed=123)
+                      as_pandas=False, seed=1)
 
-    print "SCORE:", cvresult['test-auc-mean'][-1]
+    print "AUC:", cvresult['test-auc-mean'][-1]
 
     return{'loss': 1-cvresult['test-auc-mean'][-1], 'status': STATUS_OK ,
            'attachments': {'best_n': str(len(cvresult['test-auc-mean']))}}
@@ -61,13 +60,13 @@ def objective(space):
 
 space ={
     'max_depth': hp.choice("x_max_depth", np.arange(5, 12, 1, dtype=int)),
-    'min_child_weight': hp.quniform('x_min_child', 1, 40, 2),
+    'min_child_weight': hp.quniform('x_min_child', 1, 20, 2),
     'subsample': hp.quniform('x_subsample', 0.5, 1, 0.05),
-    'colsample_bytree': hp.quniform('x_csbtree', 0.5, 1, 0.05),
-    'colsample_bylevel': hp.quniform('x_csblevel', 0.5, 1, 0.05),
-    'gamma': hp.quniform('x_gamma', 0.0, 5, 0.1)
-    # 'scale_pos_weight': hp.quniform('x_spweight', 0, 300, 50),
-    # 'lr': hp.quniform('lr', 0.001, 0.5, 0.025)
+    'colsample_bytree': hp.quniform('x_csbtree', 0.25, 1, 0.05),
+    'colsample_bylevel': hp.quniform('x_csblevel', 0.25, 1, 0.05),
+    'gamma': hp.quniform('x_gamma', 0.0, 1, 0.05),
+    'scale_pos_weight': hp.qloguniform('x_spweight', 0, 6, 1),
+    'lr': hp.quniform('lr', 0.001, 0.5, 0.025)
     # 'lr': hp.loguniform('lr', -7, -1)
 }
 
@@ -87,14 +86,15 @@ best_n = trials.attachments['ATTACH::{}::best_n'.format(trials.best_trial['tid']
 best_n = int(best_n)
 
 clf = xgb.XGBClassifier(n_estimators=int(1.25 * best_n),
-                        learning_rate=0.025,
+                        learning_rate=best_pars['lr'],
                         max_depth=best_pars['max_depth'],
                         min_child_weight=best_pars['min_child_weight'],
                         subsample=best_pars['subsample'],
                         colsample_bytree=best_pars['colsample_bytree'],
                         colsample_bylevel=best_pars['colsample_bylevel'],
                         gamma=best_pars['gamma'],
-                        scale_pos_weight=200., seed=123)
+                        scale_pos_weight=best_pars['scale_pos_weigth'],
+                        seed=1)
 
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
@@ -106,7 +106,7 @@ pipeline = Pipeline(estimators)
 pipeline.fit(dtrain[predictors], dtrain['variable'])
 
 # Load blind test data
-file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics_normalized.log'
+file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics.log'
 file_tgt = os.path.join(data_dir, file_tgt)
 X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_delete,
                                                   delta)
