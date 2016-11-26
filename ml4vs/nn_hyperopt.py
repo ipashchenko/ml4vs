@@ -5,15 +5,17 @@ import numpy as np
 import pandas as pd
 from hyperopt import Trials, STATUS_OK, tpe
 from keras import callbacks
-from keras.models import Sequential
+from keras.models import Sequential, load_model
 from keras.layers import Dense
 from keras.layers import Dropout
 from keras.metrics import fbeta_score
 from keras.layers import Activation
 from keras.constraints import maxnorm
 from keras.optimizers import SGD
+from keras.wrappers.scikit_learn import KerasClassifier
 from hyperas.distributions import choice, uniform, conditional, loguniform
-from sklearn.cross_validation import StratifiedShuffleSplit, StratifiedKFold
+from sklearn.cross_validation import (StratifiedShuffleSplit, StratifiedKFold,
+                                      cross_val_score)
 from sklearn.metrics import confusion_matrix
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -72,7 +74,8 @@ def keras_fmin_fnct(space):
         print "2 layers, 18 - {} neurons".format(space['Dense'])
         print "Dropouts: {} - {}".format(space['Dropout'], space['Dropout_1'])
         print "W_constraints: {} - {}".format(space['w1'], space['w2'])
-        print "LR = {}, Momentum = {}".format(space['lr'], space['momentum'])
+        print "LR = {}, DR = {}, Momentum = {}".format(space['lr'], space['dr'],
+                                                       space['momentum'])
         print "Batch size = {}".format(space['batch_size'])
         print "Class weight = {}".format(space['cw'])
     elif space['use_3_layers']:
@@ -85,6 +88,8 @@ def keras_fmin_fnct(space):
         print "Batch size = {}".format(space['batch_size'])
         print "Class weight = {}".format(space['cw'])
     print "=============================================="
+
+    # Create and compile model
     model = Sequential()
     model.add(Dense(18, input_dim=18, init='normal', activation='relu',
                     W_constraint=maxnorm(space['w1'])))
@@ -108,12 +113,16 @@ def keras_fmin_fnct(space):
 
     # Compile model
     learning_rate = space["lr"]
-    decay_rate = learning_rate / 400.
+    decay_rate = space["dr"]
     momentum = space['momentum']
     sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
               nesterov=False)
     model.compile(loss='binary_crossentropy', optimizer=sgd,
                   metrics=['accuracy'])
+
+    # Save model to HDF5
+    model.save('model.h5')
+    del model
 
     # earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=10,
     #                                         verbose=1, mode='auto')
@@ -130,9 +139,10 @@ def keras_fmin_fnct(space):
             X_test = transform.transform(X_test)
             X_train = transform.transform(X_train)
 
+        model = load_model('model.h5')
         model.fit(X_train, y_train,
                   batch_size=space['batch_size'],
-                  nb_epoch=400,
+                  nb_epoch=1000,
                   show_accuracy=True,
                   verbose=2,
                   validation_data=(X_test, y_test),
@@ -140,7 +150,8 @@ def keras_fmin_fnct(space):
                   class_weight={0: 1, 1: space['cw']})
         # TODO: Use CV and cross_val_score
         # score, acc = model.evaluate(X_test, y_test, verbose=1)
-        y_pred = model.predict(X_test, batch_size=space['batch_size'])
+        y_pred = model.predict(X_test, batch_size=1024)
+        del model
         y_pred = [1. if y_ > 0.5 else 0. for y_ in y_pred]
 
         CMs.append(confusion_matrix(y_test, y_pred))
@@ -157,12 +168,12 @@ def keras_fmin_fnct(space):
     f1 = 2. * TP / (2. * TP + FP + FN)
     print "F1: ", f1
 
-    return {'loss': 1-f1, 'status': STATUS_OK, 'model': model}
+    return {'loss': 1-f1, 'status': STATUS_OK}
 
 
 space = {
         'Dropout': hp.uniform('Dropout', 0., 1.),
-        'Dense': hp.choice('Dense', (9, 18, 36)),
+        'Dense': hp.choice('Dense', np.arange(9, 37, 1, dtype=int)),
         'Dropout_1': hp.uniform('Dropout_1', 0., 1.),
         # 'conditional': hp.choice('conditional', [{'n_layers': 'two'},
         #                                          {'n_layes': 'three',
@@ -170,22 +181,23 @@ space = {
         #                                           'Dropout_2': hp.uniform('Dropout_2', 0., 1.),
         #                                           'w3': hp.choice('w3', (1, 2, 3, 5, 7))}]),
         'use_3_layers': hp.choice('use_3_layers', [False,
-                                                   {'Dense_2': hp.choice('Dense_2', (9, 18, 36)),
+                                                   {'Dense_2': hp.choice('Dense_2', np.arange(9, 37, 1, dtype=int)),
                                                     'Dropout_2': hp.uniform('Dropout_2', 0., 1.),
-                                                    'w3': hp.choice('w3', (1, 2, 3, 5, 7))}]),
+                                                    'w3': hp.loguniform('w3', 0, 2)}]),
         'lr': hp.loguniform('lr', -4.6, -0.7),
-        'w1': hp.choice('w1', (1, 2, 3, 5, 7)),
-        'w2': hp.choice('w2', (1, 2, 3, 5, 7)),
-        'momentum': hp.quniform('momentum', 0.5, 0.975, 0.025),
+        'dr': hp.loguniform('dr', -10.6, -2.5),
+        'w1': hp.loguniform('w1', 0, 2),
+        'w2': hp.loguniform('w2', 0, 2),
+        'momentum': hp.uniform('momentum', 0.5, 0.995),
         'cw': hp.qloguniform('cw', 0, 6, 1),
-        'batch_size': hp.choice('batch_size', (14, 28, 56, 128, 256, 512))
+        'batch_size': hp.choice('batch_size', (14, 28, 56, 128, 256, 512, 1024))
     }
 
 trials = Trials()
 best = fmin(fn=keras_fmin_fnct,
             space=space,
             algo=tpe.suggest,
-            max_evals=100,
+            max_evals=1000,
             trials=trials)
 
 print hyperopt.space_eval(space, best)
@@ -258,6 +270,7 @@ sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
           nesterov=False)
 model.compile(loss='binary_crossentropy', optimizer=sgd,
               metrics=['accuracy'])
+model.save('model.h5')
 model.fit(X_train, y_train,
           batch_size=best_pars['batch_size'],
           nb_epoch=400,
