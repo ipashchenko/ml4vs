@@ -74,8 +74,8 @@ def keras_fmin_fnct(space):
         print "2 layers, 18 - {} neurons".format(space['Dense'])
         print "Dropouts: {} - {}".format(space['Dropout'], space['Dropout_1'])
         print "W_constraints: {} - {}".format(space['w1'], space['w2'])
-        print "LR = {}, DR = {}, Momentum = {}".format(space['lr'], space['dr'],
-                                                       space['momentum'])
+        # print "LR = {}, DR = {}, Momentum = {}".format(0.1, space['dr'],
+        #                                                space['momentum'])
         print "Batch size = {}".format(space['batch_size'])
         print "Class weight = {}".format(space['cw'])
     elif space['use_3_layers']:
@@ -84,7 +84,8 @@ def keras_fmin_fnct(space):
                                             space['use_3_layers']['Dropout_2'])
         print "W_constraints: {} - {} - {}".format(space['w1'], space['w2'],
                                                  space['use_3_layers']['w3'])
-        print "LR = {}, Momentum = {}".format(space['lr'], space['momentum'])
+        # print "LR = {}, DR = {}, Momentum = {}".format(0.1, space['dr'],
+        #                                                space['momentum'])
         print "Batch size = {}".format(space['batch_size'])
         print "Class weight = {}".format(space['cw'])
     print "=============================================="
@@ -112,8 +113,8 @@ def keras_fmin_fnct(space):
     model.add(Dense(1, init='normal', activation='sigmoid'))
 
     # Compile model
-    learning_rate = space["lr"]
-    decay_rate = space["dr"]
+    learning_rate = 0.1
+    decay_rate = None
     momentum = space['momentum']
     sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
               nesterov=False)
@@ -126,10 +127,10 @@ def keras_fmin_fnct(space):
 
     # earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=10,
     #                                         verbose=1, mode='auto')
-    earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=50,
+    earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=25,
                                             verbose=1, mode='auto')
 
-    CMs = list()
+    AUCs = list()
     for train_index, test_index in kfold:
         X_train, X_test = X[train_index], X[test_index]
         y_train, y_test = y[train_index], y[test_index]
@@ -152,52 +153,44 @@ def keras_fmin_fnct(space):
         # score, acc = model.evaluate(X_test, y_test, verbose=1)
         y_pred = model.predict(X_test, batch_size=1024)
         del model
-        y_pred = [1. if y_ > 0.5 else 0. for y_ in y_pred]
+        auc = roc_auc_score(y[test_index], y_pred)
 
-        CMs.append(confusion_matrix(y_test, y_pred))
+        AUCs.append(auc)
 
-    CM = np.sum(CMs, axis=0)
+    auc = np.mean(AUCs, axis=0)
 
-    FN = CM[1][0]
-    TP = CM[1][1]
-    FP = CM[0][1]
-    print "TP = {}".format(TP)
-    print "FP = {}".format(FP)
-    print "FN = {}".format(FN)
+    print "AUC: ", auc
 
-    f1 = 2. * TP / (2. * TP + FP + FN)
-    print "F1: ", f1
-
-    return {'loss': 1-f1, 'status': STATUS_OK}
+    return {'loss': 1-auc, 'status': STATUS_OK}
 
 
 space = {
-        'Dropout': hp.uniform('Dropout', 0., 1.),
-        'Dense': hp.choice('Dense', np.arange(9, 37, 1, dtype=int)),
-        'Dropout_1': hp.uniform('Dropout_1', 0., 1.),
+        'Dropout': hp.quniform('Dropout', 0., 1., 0.05),
+        'Dense': hp.choice('Dense', (9, 18, 36)),
+        'Dropout_1': hp.quniform('Dropout_1', 0., 1., 0.05),
         # 'conditional': hp.choice('conditional', [{'n_layers': 'two'},
         #                                          {'n_layes': 'three',
         #                                           'Dense_2': hp.choice('Dense_2', (9, 18, 36)),
         #                                           'Dropout_2': hp.uniform('Dropout_2', 0., 1.),
         #                                           'w3': hp.choice('w3', (1, 2, 3, 5, 7))}]),
         'use_3_layers': hp.choice('use_3_layers', [False,
-                                                   {'Dense_2': hp.choice('Dense_2', np.arange(9, 37, 1, dtype=int)),
-                                                    'Dropout_2': hp.uniform('Dropout_2', 0., 1.),
-                                                    'w3': hp.loguniform('w3', 0, 2)}]),
-        'lr': hp.loguniform('lr', -4.6, -0.7),
-        'dr': hp.loguniform('dr', -10.6, -2.5),
-        'w1': hp.loguniform('w1', 0, 2),
-        'w2': hp.loguniform('w2', 0, 2),
-        'momentum': hp.uniform('momentum', 0.5, 0.995),
+                                                   {'Dense_2': hp.choice('Dense_2', (9, 18, 36)),
+                                                    'Dropout_2': hp.quniform('Dropout_2', 0., 1., 0.05),
+                                                    'w3': hp.choice('w3', (2, 3, 4, 5))}]),
+        # 'lr': hp.loguniform('lr', -4.6, -0.7),
+        # 'dr': hp.loguniform('dr', -10.6, -2.5),
+        'w1': hp.choice('w1', (2, 3, 4, 5)),
+        'w2': hp.choice('w2', (2, 3, 4, 5)),
+        'momentum': hp.quniform('momentum', 0.5, 0.95, 0.05),
         'cw': hp.qloguniform('cw', 0, 6, 1),
-        'batch_size': hp.choice('batch_size', (14, 28, 56, 128, 256, 512, 1024))
+        'batch_size': hp.choice('batch_size', (256, 512, 1024))
     }
 
 trials = Trials()
 best = fmin(fn=keras_fmin_fnct,
             space=space,
             algo=tpe.suggest,
-            max_evals=1000,
+            max_evals=100,
             trials=trials)
 
 print hyperopt.space_eval(space, best)
@@ -263,8 +256,8 @@ model.add(Dense(1, init='normal', activation='sigmoid'))
 # model.add(Dense(1, init='normal', activation='sigmoid'))
 
 # Compile model
-learning_rate = best_pars["lr"]
-decay_rate = learning_rate / 400.
+learning_rate = 0.1
+decay_rate = None
 momentum = best_pars['momentum']
 sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
           nesterov=False)
@@ -273,7 +266,7 @@ model.compile(loss='binary_crossentropy', optimizer=sgd,
 model.save('model.h5')
 model.fit(X_train, y_train,
           batch_size=best_pars['batch_size'],
-          nb_epoch=400,
+          nb_epoch=1000,
           show_accuracy=True,
           verbose=2,
           validation_data=(X_test, y_test),
@@ -359,8 +352,8 @@ if best_pars['use_3_layers']:
 model.add(Dense(1, init='normal', activation='sigmoid'))
 
 # Compile model
-learning_rate = best_pars["lr"]
-decay_rate = learning_rate / 400.
+learning_rate = 0.1
+decay_rate = None
 momentum = best_pars['momentum']
 sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
           nesterov=False)
