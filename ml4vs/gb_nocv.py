@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import numpy as np
+from sklearn.metrics import average_precision_score
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics import f1_score
 from sklearn.metrics import roc_auc_score, f1_score
@@ -45,7 +46,7 @@ def xg_f1(y, t):
 
 
 def objective(space):
-    clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=space['lr'],
+    clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=0.1,
                             max_depth=space['max_depth'],
                             min_child_weight=space['min_child_weight'],
                             subsample=space['subsample'],
@@ -65,7 +66,7 @@ def objective(space):
 
     best_n = ""
     # CMs = list()
-    aucs = list()
+    aprs = list()
     for train_indx, test_indx in kfold.split(dtrain[predictors].index,
                                              dtrain['variable']):
         train = dtrain.iloc[train_indx]
@@ -87,13 +88,13 @@ def objective(space):
 
         # TODO: Try ES on default eval. metric or AUC!!!
         pipeline.fit(train[predictors], train['variable'],
-                     clf__eval_set=eval_set, clf__eval_metric="auc",
+                     clf__eval_set=eval_set, clf__eval_metric="map",
                      # clf__eval_set=eval_set, clf__eval_metric=xg_f1,
                      clf__early_stopping_rounds=50)
 
         pred = pipeline.predict_proba(valid[predictors])[:, 1]
-        auc = roc_auc_score(y[test_indx], pred)
-        aucs.append(auc)
+        aps = average_precision_score(valid['variable'], pred)
+        aprs.append(aps)
         # CMs.append(confusion_matrix(y[test_indx], pred))
         best_n = best_n + " " + str(clf.best_ntree_limit)
 
@@ -107,10 +108,10 @@ def objective(space):
     # print "FN = {}".format(FN)
 
     # f1 = 2. * TP / (2. * TP + FP + FN)
-    AUC = np.mean(aucs)
-    print "AUC : {}".format(AUC)
+    APR = np.mean(aprs)
+    print "=== APR : {} ===".format(APR)
 
-    return{'loss': 1-AUC, 'status': STATUS_OK ,
+    return{'loss': 1-APR, 'status': STATUS_OK ,
            'attachments': {'best_n': best_n}}
 
 
@@ -122,7 +123,7 @@ space ={
     'colsample_bylevel': hp.quniform('x_csblevel', 0.25, 1, 0.05),
     'gamma': hp.quniform('x_gamma', 0.0, 1, 0.05),
     'scale_pos_weight': hp.qloguniform('x_spweight', 0, 6, 1),
-    'lr': hp.quniform('lr', 0.001, 0.5, 0.025)
+    # 'lr': hp.quniform('lr', 0.001, 0.5, 0.025)
     # 'lr': hp.loguniform('lr', -7, -1)
 }
 
@@ -131,7 +132,7 @@ trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=500,
+            max_evals=1000,
             trials=trials)
 
 import hyperopt
@@ -167,8 +168,8 @@ X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_dele
                                                   delta)
 
 y_probs = pipeline.predict_proba(df[predictors])[:, 1]
-idx = y_probs > 0.65
-idx_ = y_probs < 0.65
+idx = y_probs > 0.5
+idx_ = y_probs < 0.5
 gb_no = list(df_orig['star_ID'][idx_])
 print("Found {} variables".format(np.count_nonzero(idx)))
 
