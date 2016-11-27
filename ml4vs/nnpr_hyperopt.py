@@ -2,18 +2,13 @@ import hyperopt
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 import os
 import numpy as np
-import pandas as pd
 from hyperopt import Trials, STATUS_OK, tpe
 from keras import callbacks
 from keras.models import Sequential, load_model
 from keras.layers import Dense
 from keras.layers import Dropout
-from keras.metrics import fbeta_score
-from keras.layers import Activation
 from keras.constraints import maxnorm
 from keras.optimizers import SGD
-from keras.wrappers.scikit_learn import KerasClassifier
-from hyperas.distributions import choice, uniform, conditional, loguniform
 from sklearn.cross_validation import (StratifiedShuffleSplit, StratifiedKFold,
                                       cross_val_score)
 from sklearn.metrics import confusion_matrix
@@ -119,7 +114,7 @@ def keras_fmin_fnct(space):
     sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
               nesterov=False)
     model.compile(loss='binary_crossentropy', optimizer=sgd,
-                  metrics=['fbeta_score'])
+                  metrics=['accuracy'])
 
     # Save model to HDF5
     model.save('model.h5')
@@ -150,20 +145,20 @@ def keras_fmin_fnct(space):
                   class_weight={0: 1, 1: space['cw']})
         # TODO: Use CV and cross_val_score
         # score, acc = model.evaluate(X_test, y_test, verbose=1)
-        y_pred = model.predict(X_test, batch_size=1024)
+        y_pred = model.predict(X_test, batch_size=space['batch_size'])
         del model
         aps = average_precision_score(y[test_index], y_pred)
-
+        print "== Fold AUPRC: {} ==".format(aps)
         laps.append(aps)
 
     aps = np.mean(laps)
-    print "Area Under PR-Curve: ", aps
+    print "== Area Under PR-Curve: {} ==".format(aps)
 
     return {'loss': 1-aps, 'status': STATUS_OK}
 
 space = {
         'Dropout': hp.quniform('Dropout', 0., 0.5, 0.05),
-        'Dense': hp.choice('Dense', (9, 18, 36)),
+        'Dense': hp.choice('Dense', (9, 13, 18, 22, 27)),
         'Dropout_1': hp.quniform('Dropout_1', 0., 0.5, 0.05),
         # 'conditional': hp.choice('conditional', [{'n_layers': 'two'},
         #                                          {'n_layes': 'three',
@@ -171,7 +166,7 @@ space = {
         #                                           'Dropout_2': hp.uniform('Dropout_2', 0., 1.),
         #                                           'w3': hp.choice('w3', (1, 2, 3, 5, 7))}]),
         'use_3_layers': hp.choice('use_3_layers', [False,
-                                                   {'Dense_2': hp.choice('Dense_2', (9, 18, 36)),
+                                                   {'Dense_2': hp.choice('Dense_2', (9, 13, 18, 22, 27)),
                                                     'Dropout_2': hp.quniform('Dropout_2', 0., 0.5, 0.05),
                                                     'w3': hp.choice('w3', (2, 3, 4, 5))}]),
         # 'lr': hp.loguniform('lr', -4.6, -0.7),
@@ -180,7 +175,7 @@ space = {
         'w2': hp.choice('w2', (2, 3, 4, 5)),
         # 'momentum': hp.quniform('momentum', 0.5, 0.95, 0.05),
         # 'cw': hp.qloguniform('cw', 0, 6, 1),
-        'cw': hp.quniform('cw', 5, 200, 5),
+        'cw': hp.quniform('cw', 1, 20, 1),
         'batch_size': hp.choice('batch_size', (256, 512, 1024))
     }
 
@@ -188,7 +183,7 @@ trials = Trials()
 best = fmin(fn=keras_fmin_fnct,
             space=space,
             algo=tpe.suggest,
-            max_evals=50,
+            max_evals=100,
             trials=trials)
 
 print hyperopt.space_eval(space, best)
@@ -196,7 +191,7 @@ best_pars = hyperopt.space_eval(space, best)
 
 
 # Now show plots
-sss = StratifiedShuffleSplit(y, n_iter=1, test_size=0.25, random_state=123)
+sss = StratifiedShuffleSplit(y, n_iter=1, test_size=0.25, random_state=1)
 for train_index, test_index in sss:
     X_train, X_test = X[train_index], X[test_index]
     y_train, y_test = y[train_index], y[test_index]
@@ -213,7 +208,7 @@ for name, transform in pipeline.steps:
     X_train = transform.transform(X_train)
 
 history = callbacks.History()
-earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=100,
+earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=50,
                                         verbose=1, mode='auto')
 
 # Build model with best parameters
@@ -223,14 +218,8 @@ model.add(Dense(18, input_dim=18, init='normal', activation='relu',
 model.add(Dropout(best_pars['Dropout']))
 model.add(Dense(best_pars['Dense'], init='normal', activation='relu',
                 W_constraint=maxnorm(best_pars['w2'])))
-# model.add(Activation(space['Activation']))
 model.add(Dropout(best_pars['Dropout_1']))
 
-# if conditional(space['conditional']) == 'three':
-#     model.add(Dense(space['Dense_2'], activation='relu',
-#                     W_constraint=maxnorm(space['w3']),
-#                     init='normal'))
-#     model.add(Dropout(space['Dropout_2']))
 if best_pars['use_3_layers']:
     model.add(Dense(best_pars['use_3_layers']['Dense_2'], activation='relu',
                     W_constraint=maxnorm(best_pars['use_3_layers']['w3']),
@@ -238,25 +227,10 @@ if best_pars['use_3_layers']:
     model.add(Dropout(best_pars['use_3_layers']['Dropout_2']))
 model.add(Dense(1, init='normal', activation='sigmoid'))
 
-# # Build model with best parameters
-# model = Sequential()
-# model.add(Dense(18, input_dim=18, init='normal', activation='relu',
-#                 W_constraint=maxnorm(best_pars['w1'])))
-# model.add(Dropout(best_pars['Dropout']))
-# model.add(Dense(best_pars['Dense'], init='normal', activation='relu',
-#                 W_constraint=maxnorm(best_pars['w2'])))
-# # model.add(Activation(space['Activation']))
-# model.add(Dropout(best_pars['Dropout_1']))
-# if conditional(best_pars['conditional']) == 'three':
-#     model.add(Dense(12, activation='relu', W_constraint=maxnorm(best_pars['w3']),
-#                     init='normal'))
-#     model.add(Dropout(best_pars['Dropout_2']))
-# model.add(Dense(1, init='normal', activation='sigmoid'))
-
 # Compile model
-learning_rate = 0.1
-decay_rate = None
-momentum = best_pars['momentum']
+learning_rate = 0.2
+decay_rate = 0.001
+momentum = 0.9
 sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
           nesterov=False)
 model.compile(loss='binary_crossentropy', optimizer=sgd,
@@ -312,21 +286,6 @@ for name, transform in pipeline.steps:
     transform.fit(X)
     X = transform.transform(X)
 
-# # Build model with best parameters
-# model = Sequential()
-# model.add(Dense(18, input_dim=18, init='normal', activation='relu',
-#                 W_constraint=maxnorm(best_pars['w1'])))
-# model.add(Dropout(best_pars['Dropout']))
-# model.add(Dense(best_pars['Dense'], init='normal', activation='relu',
-#                 W_constraint=maxnorm(best_pars['w2'])))
-# # model.add(Activation(space['Activation']))
-# model.add(Dropout(best_pars['Dropout_1']))
-# if conditional(best_pars['conditional']) == 'three':
-#     model.add(Dense(12, activation='relu', W_constraint=maxnorm(best_pars['w3']),
-#                     init='normal'))
-#     model.add(Dropout(best_pars['Dropout_2']))
-# model.add(Dense(1, init='normal', activation='sigmoid'))
-
 # Build model with best parameters
 model = Sequential()
 model.add(Dense(18, input_dim=18, init='normal', activation='relu',
@@ -334,14 +293,8 @@ model.add(Dense(18, input_dim=18, init='normal', activation='relu',
 model.add(Dropout(best_pars['Dropout']))
 model.add(Dense(best_pars['Dense'], init='normal', activation='relu',
                 W_constraint=maxnorm(best_pars['w2'])))
-# model.add(Activation(space['Activation']))
 model.add(Dropout(best_pars['Dropout_1']))
 
-# if conditional(space['conditional']) == 'three':
-#     model.add(Dense(space['Dense_2'], activation='relu',
-#                     W_constraint=maxnorm(space['w3']),
-#                     init='normal'))
-#     model.add(Dropout(space['Dropout_2']))
 if best_pars['use_3_layers']:
     model.add(Dense(best_pars['use_3_layers']['Dense_2'], activation='relu',
                     W_constraint=maxnorm(best_pars['use_3_layers']['w3']),
@@ -350,9 +303,9 @@ if best_pars['use_3_layers']:
 model.add(Dense(1, init='normal', activation='sigmoid'))
 
 # Compile model
-learning_rate = 0.1
-decay_rate = None
-momentum = best_pars['momentum']
+learning_rate = 0.2
+decay_rate = 0.001
+momentum = 0.9
 sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
           nesterov=False)
 model.compile(loss='binary_crossentropy', optimizer=sgd,
