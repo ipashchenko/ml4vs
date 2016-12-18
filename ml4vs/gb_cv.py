@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
+import sys
+import pprint
 import os
 import numpy as np
+from sklearn.metrics import f1_score
+
+sys.path.append('/home/ilya/xgboost/xgboost/python-package/')
 import xgboost as xgb
 from hyperopt import hp, fmin, tpe, STATUS_OK, Trials
 from sklearn.cross_validation import StratifiedKFold
@@ -19,9 +24,11 @@ names = ['Magnitude', 'clipped_sigma', 'meaningless_1', 'meaningless_2',
          'star_ID', 'weighted_sigma', 'skew', 'kurt', 'I', 'J', 'K', 'L',
          'Npts', 'MAD', 'lag1', 'RoMS', 'rCh2', 'Isgn', 'Vp2p', 'Jclp', 'Lclp',
          'Jtim', 'Ltim', 'CSSD', 'Ex', 'inv_eta', 'E_A', 'S_B', 'NXS', 'IQR']
-names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
-                   'Npts', 'CSSD', 'clipped_sigma', 'lag1', 'L', 'Lclp', 'Jclp',
-                   'MAD', 'Ltim']
+# names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
+#                    'Npts', 'CSSD', 'clipped_sigma', 'lag1', 'L', 'Lclp', 'Jclp',
+#                    'MAD', 'Ltim']
+names_to_delete = ['Magnitude', 'meaningless_1', 'meaningless_2', 'star_ID',
+                   'Npts', 'CSSD']
 
 X, y, df, features_names, delta = load_data([file_0, file_1], names, names_to_delete)
 target = 'variable'
@@ -29,12 +36,23 @@ predictors = list(df)
 predictors.remove(target)
 dtrain = df
 
+# from imblearn.over_sampling import SMOTE
+# ratio = 0.05
+# smote = SMOTE(ratio=ratio, kind='regular')
+# X, y = smote.fit_sample(X, y)
+
 
 kfold = StratifiedKFold(dtrain[target], n_folds=4, shuffle=True,
                         random_state=1)
+def xg_f1(y, t):
+    t = t.get_label()
+    # Binaryzing your output
+    y_bin = [1. if y_cont > 0.5 else 0. for y_cont in y]
+    return 'f1', 1-f1_score(t, y_bin)
 
 
 def objective(space):
+    pprint.pprint(space)
     clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=space['lr'],
                             max_depth=space['max_depth'],
                             min_child_weight=space['min_child_weight'],
@@ -42,32 +60,33 @@ def objective(space):
                             colsample_bytree=space['colsample_bytree'],
                             colsample_bylevel=space['colsample_bylevel'],
                             gamma=space['gamma'],
-                            scale_pos_weight=space['scale_pos_weight'], seed=1)
+                            scale_pos_weight=space['scale_pos_weight'],
+                            max_delta_step=space['mds'],
+                            seed=1)
     # scale_pos_weight=space['scale_pos_weight'])
     xgb_param = clf.get_xgb_params()
     xgtrain = xgb.DMatrix(dtrain[predictors].values, label=dtrain[target].values)
     cvresult = xgb.cv(xgb_param, xgtrain,
                       num_boost_round=clf.get_params()['n_estimators'],
-                      folds=kfold, metrics='auc',
-                      early_stopping_rounds=50, verbose_eval=True,
+                      folds=kfold, feval=xg_f1,
+                      early_stopping_rounds=10, verbose_eval=True,
                       as_pandas=False, seed=1)
 
-    print "AUC:", cvresult['test-auc-mean'][-1]
+    print "F1:", 1-cvresult['test-f1-mean'][-1]
 
-    return{'loss': 1-cvresult['test-auc-mean'][-1], 'status': STATUS_OK ,
-           'attachments': {'best_n': str(len(cvresult['test-auc-mean']))}}
-
+    return{'loss': cvresult['test-f1-mean'][-1], 'status': STATUS_OK ,
+           'attachments': {'best_n': str(len(cvresult['test-f1-mean']))}}
 
 space ={
-    'max_depth': hp.choice("x_max_depth", np.arange(5, 12, 1, dtype=int)),
-    'min_child_weight': hp.quniform('x_min_child', 1, 20, 2),
-    'subsample': hp.quniform('x_subsample', 0.5, 1, 0.05),
-    'colsample_bytree': hp.quniform('x_csbtree', 0.25, 1, 0.05),
-    'colsample_bylevel': hp.quniform('x_csblevel', 0.25, 1, 0.05),
-    'gamma': hp.quniform('x_gamma', 0.0, 1, 0.05),
-    'scale_pos_weight': hp.qloguniform('x_spweight', 0, 6, 1),
-    'lr': hp.quniform('lr', 0.001, 0.5, 0.025)
-    # 'lr': hp.loguniform('lr', -7, -1)
+    'max_depth': hp.choice("x_max_depth", np.arange(4, 12, 1, dtype=int)),
+    'min_child_weight': hp.quniform('x_min_child', 1, 20, 1),
+    'subsample': hp.quniform('x_subsample', 0.5, 1, 0.025),
+    'colsample_bytree': hp.quniform('x_csbtree', 0.5, 1, 0.025),
+    'colsample_bylevel': hp.quniform('x_csblevel', 0.5, 1, 0.025),
+    'gamma': hp.uniform('x_gamma', 0.0, 20),
+    'scale_pos_weight': hp.quniform('x_spweight', 1, 30, 2),
+    'mds': hp.choice('mds', np.arange(0, 11, dtype=int)),
+    'lr': hp.loguniform('lr', -4.7, -1.25)
 }
 
 
@@ -75,7 +94,7 @@ trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=75,
+            max_evals=200,
             trials=trials)
 
 import hyperopt
@@ -112,8 +131,8 @@ X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_dele
                                                   delta)
 
 y_probs = pipeline.predict_proba(df[predictors])[:, 1]
-idx = y_probs > 0.5
-idx_ = y_probs < 0.5
+idx = y_probs > 0.7
+idx_ = y_probs < 0.7
 gb_no = list(df_orig['star_ID'][idx_])
 print("Found {} variables".format(np.count_nonzero(idx)))
 
