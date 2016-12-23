@@ -4,6 +4,7 @@ import hyperopt
 import pprint
 import numpy as np
 from sklearn.cross_validation import StratifiedKFold
+from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.model_selection import cross_val_predict
 from sklearn.metrics import confusion_matrix
 from sklearn.neighbors import KNeighborsClassifier
@@ -15,7 +16,7 @@ from data_load import load_data
 
 
 # Load data
-data_dir = '/home/ilya/github/ml4vs/data/Kr/raw_index_values'
+data_dir = '/home/ilya/code/ml4vs/data/Kr/raw_index_values'
 file_1 = 'vast_lightcurve_statistics_variables_only.log'
 file_0 = 'vast_lightcurve_statistics_constant_only.log'
 file_0 = os.path.join(data_dir, file_0)
@@ -73,12 +74,27 @@ def objective(space):
 space = {'n_neighbors': hp.qloguniform("n_neighbors", 0, 6.55, 1)}
 
 
-trials = Trials()
-best = fmin(fn=objective,
-            space=space,
-            algo=tpe.suggest,
-            max_evals=300,
-            trials=trials)
+# trials = Trials()
+# best = fmin(fn=objective,
+#             space=space,
+#             algo=tpe.suggest,
+#             max_evals=300,
+#             trials=trials)
+#
+# pprint.pprint(hyperopt.space_eval(space, best))
+# best_pars = hyperopt.space_eval(space, best)
 
-pprint.pprint(hyperopt.space_eval(space, best))
-best_pars = hyperopt.space_eval(space, best)
+
+clf = KNeighborsClassifier(n_neighbors=4,
+                           weights='distance', n_jobs=1)
+estimators = list()
+estimators.append(('imputer', Imputer(missing_values='NaN',
+                                      strategy='median',
+                                      axis=0, verbose=2)))
+estimators.append(('scaler', StandardScaler()))
+estimators.append(('clf', clf))
+pipeline = Pipeline(estimators)
+
+cv = StratifiedShuffleSplit(n_splits=20, test_size=0.25, random_state=0)
+from plotting import plot_learning_curve
+plot_learning_curve(pipeline, 'kNN', X, y, cv=cv, n_jobs=4, scoring='f1')
