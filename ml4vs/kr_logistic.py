@@ -59,7 +59,7 @@ def log_axis(X_, names=None):
 
 
 def objective(space):
-    pprint(space)
+    pprint.pprint(space)
     clf = LogisticRegression(C=space['C'], class_weight={0: 1, 1: space['cw']},
                              random_state=1, max_iter=300, n_jobs=1,
                              tol=10.**(-5))
@@ -70,7 +70,7 @@ def objective(space):
                                           axis=0, verbose=2)))
     estimators.append(('func', FunctionTransformer(log_axis,
                                                    kw_args={'names':
-                                                                predictors})))
+                                                            predictors})))
     estimators.append(('scaler', StandardScaler()))
     estimators.append(('pca', pca))
     estimators.append(('clf', clf))
