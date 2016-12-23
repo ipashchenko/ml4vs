@@ -117,11 +117,11 @@ def objective(space):
 
 space ={
     'max_depth': hp.choice("x_max_depth", np.arange(5, 12, 1, dtype=int)),
-    'min_child_weight': hp.quniform('x_min_child', 1, 20, 2),
-    'subsample': hp.quniform('x_subsample', 0.5, 1, 0.05),
-    'colsample_bytree': hp.quniform('x_csbtree', 0.25, 1, 0.05),
-    'colsample_bylevel': hp.quniform('x_csblevel', 0.25, 1, 0.05),
-    'gamma': hp.quniform('x_gamma', 0.0, 1, 0.05),
+    'min_child_weight': hp.quniform('x_min_child', 1, 20, 1),
+    'subsample': hp.quniform('x_subsample', 0.5, 1, 0.025),
+    'colsample_bytree': hp.quniform('x_csbtree', 0.25, 1, 0.025),
+    'colsample_bylevel': hp.quniform('x_csblevel', 0.25, 1, 0.025),
+    'gamma': hp.quniform('x_gamma', 0.0, 1, 0.025),
     'scale_pos_weight': hp.qloguniform('x_spweight', 0, 6, 1),
     # 'lr': hp.quniform('lr', 0.001, 0.5, 0.025)
     # 'lr': hp.loguniform('lr', -7, -1)
@@ -132,7 +132,7 @@ trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=1000,
+            max_evals=500,
             trials=trials)
 
 import hyperopt
@@ -143,7 +143,7 @@ best_n = trials.attachments['ATTACH::{}::best_n'.format(trials.best_trial['tid']
 best_n = max([int(n) for n in best_n.strip().split(' ')])
 
 clf = xgb.XGBClassifier(n_estimators=int(1.25 * best_n),
-                        learning_rate=best_pars['lr'],
+                        learning_rate=0.1,
                         max_depth=best_pars['max_depth'],
                         min_child_weight=best_pars['min_child_weight'],
                         subsample=best_pars['subsample'],

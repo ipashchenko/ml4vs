@@ -113,13 +113,13 @@ def keras_fmin_fnct(space):
     model.add(Dense(1, init='normal', activation='sigmoid'))
 
     # Compile model
-    learning_rate = 0.1
-    decay_rate = None
-    momentum = space['momentum']
+    learning_rate = 0.2
+    decay_rate = 0.001
+    momentum = 0.9
     sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
               nesterov=False)
     model.compile(loss='binary_crossentropy', optimizer=sgd,
-                  metrics=['accuracy'])
+                  metrics=['fbeta_score'])
 
     # Save model to HDF5
     model.save('model.h5')
@@ -130,7 +130,7 @@ def keras_fmin_fnct(space):
     earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=25,
                                             verbose=1, mode='auto')
 
-    AUCs = list()
+    CMs = list()
     for train_index, test_index in kfold:
         X_train, X_test = X[train_index], X[test_index]
         y_train, y_test = y[train_index], y[test_index]
@@ -144,7 +144,6 @@ def keras_fmin_fnct(space):
         model.fit(X_train, y_train,
                   batch_size=space['batch_size'],
                   nb_epoch=1000,
-                  show_accuracy=True,
                   verbose=2,
                   validation_data=(X_test, y_test),
                   callbacks=[earlyStopping],
@@ -153,21 +152,29 @@ def keras_fmin_fnct(space):
         # score, acc = model.evaluate(X_test, y_test, verbose=1)
         y_pred = model.predict(X_test, batch_size=1024)
         del model
-        auc = roc_auc_score(y[test_index], y_pred)
+        y_pred = [1. if y_ > 0.5 else 0. for y_ in y_pred]
 
-        AUCs.append(auc)
+        CMs.append(confusion_matrix(y_test, y_pred))
 
-    auc = np.mean(AUCs, axis=0)
+    CM = np.sum(CMs, axis=0)
 
-    print "AUC: ", auc
+    FN = CM[1][0]
+    TP = CM[1][1]
+    FP = CM[0][1]
+    print "TP = {}".format(TP)
+    print "FP = {}".format(FP)
+    print "FN = {}".format(FN)
 
-    return {'loss': 1-auc, 'status': STATUS_OK}
+    f1 = 2. * TP / (2. * TP + FP + FN)
+    print "F1: ", f1
+
+    return {'loss': 1-f1, 'status': STATUS_OK}
 
 
 space = {
-        'Dropout': hp.quniform('Dropout', 0., 1., 0.05),
+        'Dropout': hp.quniform('Dropout', 0., 0.5, 0.05),
         'Dense': hp.choice('Dense', (9, 18, 36)),
-        'Dropout_1': hp.quniform('Dropout_1', 0., 1., 0.05),
+        'Dropout_1': hp.quniform('Dropout_1', 0., 0.5, 0.05),
         # 'conditional': hp.choice('conditional', [{'n_layers': 'two'},
         #                                          {'n_layes': 'three',
         #                                           'Dense_2': hp.choice('Dense_2', (9, 18, 36)),
@@ -175,14 +182,15 @@ space = {
         #                                           'w3': hp.choice('w3', (1, 2, 3, 5, 7))}]),
         'use_3_layers': hp.choice('use_3_layers', [False,
                                                    {'Dense_2': hp.choice('Dense_2', (9, 18, 36)),
-                                                    'Dropout_2': hp.quniform('Dropout_2', 0., 1., 0.05),
+                                                    'Dropout_2': hp.quniform('Dropout_2', 0., 0.5, 0.05),
                                                     'w3': hp.choice('w3', (2, 3, 4, 5))}]),
         # 'lr': hp.loguniform('lr', -4.6, -0.7),
         # 'dr': hp.loguniform('dr', -10.6, -2.5),
         'w1': hp.choice('w1', (2, 3, 4, 5)),
         'w2': hp.choice('w2', (2, 3, 4, 5)),
-        'momentum': hp.quniform('momentum', 0.5, 0.95, 0.05),
-        'cw': hp.qloguniform('cw', 0, 6, 1),
+        # 'momentum': hp.quniform('momentum', 0.5, 0.95, 0.05),
+        # 'cw': hp.qloguniform('cw', 0, 6, 1),
+        'cw': hp.quniform('cw', 5, 200, 5),
         'batch_size': hp.choice('batch_size', (256, 512, 1024))
     }
 

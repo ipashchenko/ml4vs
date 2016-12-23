@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
+import copy
+
+import keras
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sea
 from sklearn.calibration import calibration_curve
+from sklearn.model_selection import learning_curve
 
 
 def plot_corr(df, size=10):
@@ -109,9 +112,12 @@ def plot_reliability_curve(y_true, y_prob, fig_index=None, n_bins=5):
     return fig
 
 
-def plot_cv_reliability(clf, X, y, n_cv=4, n_bins=4, seed=1):
+def plot_cv_reliability(clf, X, y, n_cv=4, n_bins=4, seed=1, fit_params=None):
     from itertools import cycle
     from sklearn.model_selection import StratifiedKFold
+
+    if fit_params is None:
+        fit_params = {}
 
     colors = cycle(['cyan', 'indigo', 'seagreen', 'yellow', 'blue',
                     'darkorange'])
@@ -121,7 +127,15 @@ def plot_cv_reliability(clf, X, y, n_cv=4, n_bins=4, seed=1):
 
     cv = StratifiedKFold(n_splits=n_cv, shuffle=True, random_state=seed)
     for (train, test), color in zip(cv.split(X, y), colors):
-        probas_ = clf.fit(X[train], y[train]).predict_proba(X[test])[:, 1]
+        clf.fit(X[train], y[train], **fit_params)
+        probas_ = clf.predict_proba(X[test])
+        # Scikit-learn
+        try:
+            probas_ = probas_[:, 1]
+        # Keras
+        except IndexError:
+            probas_ = probas_[:, 0]
+        # probas_ = clf.fit(X[train], y[train]).predict_proba(X[test])[:, 1]
         b, a = calibration_curve(y[test], probas_, n_bins=n_bins,
                                  normalize=True)
         axes.plot(a, b, color=color)
@@ -134,11 +148,17 @@ def plot_cv_reliability(clf, X, y, n_cv=4, n_bins=4, seed=1):
     return fig
 
 
-def plot_cv_roc(clf, X, y, n_cv=4, seed=1):
+def plot_cv_roc(clf, X, y, n_cv=4, seed=1, fit_params=None):
     from itertools import cycle
     from sklearn.metrics import roc_curve, auc
     from sklearn.model_selection import StratifiedKFold
     from scipy import interp
+
+    if isinstance(clf, keras.models.Sequential):
+        clf.save('model.h5')
+
+    if fit_params is None:
+        fit_params = {}
 
     colors = cycle(['cyan', 'indigo', 'seagreen', 'yellow', 'blue',
                     'darkorange'])
@@ -151,9 +171,23 @@ def plot_cv_roc(clf, X, y, n_cv=4, seed=1):
 
     cv = StratifiedKFold(n_splits=n_cv, shuffle=True, random_state=seed)
     for (train, test), color in zip(cv.split(X, y), colors):
-        probas_ = clf.fit(X[train], y[train]).predict_proba(X[test])
+
+        if isinstance(clf, keras.models.Sequential):
+            clf_ = keras.models.load_model('model.h5')
+        else:
+            clf_ = copy.deepcopy(clf)
+
+        clf_.fit(X[train], y[train], **fit_params)
+        probas_ = clf_.predict_proba(X[test])
+        # Scikit-learn
+        try:
+            probas_ = probas_[:, 1]
+        # Keras
+        except IndexError:
+            probas_ = probas_[:, 0]
+        # probas_ = clf.fit(X[train], y[train]).predict_proba(X[test])
         # Compute ROC curve and area the curve
-        fpr, tpr, thresholds = roc_curve(y[test], probas_[:, 1])
+        fpr, tpr, thresholds = roc_curve(y[test], probas_)
         mean_tpr += interp(mean_fpr, fpr, tpr)
         mean_tpr[0] = 0.0
         roc_auc = auc(fpr, tpr)
@@ -181,7 +215,8 @@ def plot_cv_roc(clf, X, y, n_cv=4, seed=1):
     return fig
 
 
-def plot_cv_pr(clf, X, y, n_cv=4, seed=1, fit_params=None):
+def plot_cv_pr(clf, X, y, n_cv=4, seeds=None, fit_params=None, fig=None,
+               label=None, plot_color=None):
     """
     This averages P for the same values of R.
     """
@@ -190,47 +225,68 @@ def plot_cv_pr(clf, X, y, n_cv=4, seed=1, fit_params=None):
     from sklearn.model_selection import StratifiedKFold
     from scipy import interp
 
+    if isinstance(clf, keras.models.Sequential):
+        clf.save('model.h5')
+
+    if fit_params is None:
+        fit_params = {}
+
     colors = cycle(['cyan', 'indigo', 'seagreen', 'yellow', 'blue',
                     'darkorange'])
-    lw = 2
+    lw = 1
 
-    i = 0
-    mean_pr = 0.0
-    mean_rec = np.linspace(0, 1, 100)[::-1]
-    fig = plt.figure()
+    if not fig:
+        fig = plt.figure()
 
-    cv = StratifiedKFold(n_splits=n_cv, shuffle=True, random_state=seed)
-    for (train, test), color in zip(cv.split(X, y), colors):
-        clf.fit(X[train], y[train], **fit_params)
-        probas_ = clf.predict_proba(X[test])
-        # Scikit-learn
-        try:
-            probas_ = probas_[:, 1]
-        # Keras
-        except IndexError:
-            probas_ = probas_[:, 0]
-        # Compute PR curve and area the curve
-        # fpr, tpr, thresholds = precision_recall_curve(y[test], probas_[:, 1])
-        pr, rec, thresholds = precision_recall_curve(y[test], probas_)
-        mean_pr += interp(mean_rec, rec[::-1], pr[::-1])[::-1]
-        pr_auc = average_precision_score(y[test], probas_)
-        plt.plot(rec, pr, lw=lw, color=color,
-                 label='PR-curve fold %d (area = %0.2f)' % (i, pr_auc))
-        i += 1
+    for seed in seeds:
+        i = 0
+        mean_pr = 0.0
+        mean_rec = np.linspace(0, 1, 100)[::-1]
 
-    mean_pr /= cv.get_n_splits(X, y)
-    mean_pr[-1] = 0.0
-    mean_pr[0] = 1.0
-    mean_auc = auc(mean_rec, mean_pr, reorder=True)
-    plt.plot(mean_rec[::-1], mean_pr, color='g', linestyle='--',
-             label='Mean PR-curve (area = %0.2f)' % mean_auc, lw=lw)
+        cv = StratifiedKFold(n_splits=n_cv, shuffle=True, random_state=int(seed))
+        for (train, test), color in zip(cv.split(X, y), colors):
 
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.title('PR-curve')
-    plt.legend(loc="lower left")
+            if isinstance(clf, keras.models.Sequential):
+                clf_ = keras.models.load_model('model.h5')
+            else:
+                clf_ = copy.deepcopy(clf)
+
+            clf_.fit(X[train], y[train], **fit_params)
+            probas_ = clf_.predict_proba(X[test])
+            # Scikit-learn
+            try:
+                probas_ = probas_[:, 1]
+            # Keras
+            except IndexError:
+                probas_ = probas_[:, 0]
+            # Compute PR curve and area the curve
+            # fpr, tpr, thresholds = precision_recall_curve(y[test], probas_[:, 1])
+            pr, rec, thresholds = precision_recall_curve(y[test], probas_)
+            mean_pr += interp(mean_rec, rec[::-1], pr[::-1])[::-1]
+            pr_auc = average_precision_score(y[test], probas_)
+            # plt.plot(rec, pr, lw=lw, color=color,
+            #          label='PR-curve fold %d (area = %0.2f)' % (i, pr_auc))
+            i += 1
+
+        mean_pr /= cv.get_n_splits(X, y)
+        mean_pr[-1] = 0.0
+        mean_pr[0] = 1.0
+        mean_auc = auc(mean_rec, mean_pr, reorder=True)
+        # plt.plot(mean_rec[::-1], mean_pr, color='g', linestyle='--',
+        #          label='Mean PR-curve (area = %0.2f)' % mean_auc, lw=lw)
+        if not plot_color:
+            plot_color = 'g'
+        plt.plot(mean_rec[::-1], mean_pr, color=plot_color,
+                 label=label, lw=lw, alpha=0.25)
+
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('Recall')
+        plt.ylabel('Precision')
+        plt.title('PR-curve')
+        plt.legend(loc="lower left")
+        # plt.show()
+
     plt.show()
 
     return fig
@@ -241,13 +297,25 @@ def best_f1_thresholds(clf, X, y, n_cv=4, seed=1, fit_params=None):
         confusion_matrix
     from sklearn.cross_validation import StratifiedKFold
 
+    if isinstance(clf, keras.models.Sequential):
+        clf.save('model.h5')
+
+    if fit_params is None:
+        fit_params = {}
+
     cv = StratifiedKFold(y, n_folds=n_cv, shuffle=True, random_state=seed)
     cv_threshs = list()
     cv_probas = list()
     CMs = list()
     for train_idx, test_idx in cv:
-        clf.fit(X[train_idx], y[train_idx], **fit_params)
-        probas = clf.predict_proba(X[test_idx])
+
+        if isinstance(clf, keras.models.Sequential):
+            clf_ = keras.models.load_model('model.h5')
+        else:
+            clf_ = copy.deepcopy(clf)
+
+        clf_.fit(X[train_idx], y[train_idx], **fit_params)
+        probas = clf_.predict_proba(X[test_idx])
         # Scikit-learn
         try:
             probas = probas[:, 1]
@@ -285,3 +353,74 @@ def best_f1_thresholds(clf, X, y, n_cv=4, seed=1, fit_params=None):
 
     return best_thresh, f1
 
+
+def plot_learning_curve(estimator, title, X, y, ylim=None, cv=None,
+                        n_jobs=1, train_sizes=np.linspace(.1, 1.0, 5),
+                        scoring=None):
+    """
+    Generate a simple plot of the test and training learning curve.
+
+    Parameters
+    ----------
+    estimator : object type that implements the "fit" and "predict" methods
+        An object of that type which is cloned for each validation.
+
+    title : string
+        Title for the chart.
+
+    X : array-like, shape (n_samples, n_features)
+        Training vector, where n_samples is the number of samples and
+        n_features is the number of features.
+
+    y : array-like, shape (n_samples) or (n_samples, n_features), optional
+        Target relative to X for classification or regression;
+        None for unsupervised learning.
+
+    ylim : tuple, shape (ymin, ymax), optional
+        Defines minimum and maximum yvalues plotted.
+
+    cv : int, cross-validation generator or an iterable, optional
+        Determines the cross-validation splitting strategy.
+        Possible inputs for cv are:
+          - None, to use the default 3-fold cross-validation,
+          - integer, to specify the number of folds.
+          - An object to be used as a cross-validation generator.
+          - An iterable yielding train/test splits.
+
+        For integer/None inputs, if ``y`` is binary or multiclass,
+        :class:`StratifiedKFold` used. If the estimator is not a classifier
+        or if ``y`` is neither binary nor multiclass, :class:`KFold` is used.
+
+        Refer :ref:`User Guide <cross_validation>` for the various
+        cross-validators that can be used here.
+
+    n_jobs : integer, optional
+        Number of jobs to run in parallel (default 1).
+    """
+    plt.figure()
+    plt.title(title)
+    if ylim is not None:
+        plt.ylim(*ylim)
+    plt.xlabel("Training examples")
+    plt.ylabel("Score")
+    train_sizes, train_scores, test_scores =\
+        learning_curve(estimator, X, y, cv=cv, n_jobs=n_jobs,
+                       train_sizes=train_sizes, scoring=scoring)
+    train_scores_mean = np.mean(train_scores, axis=1)
+    train_scores_std = np.std(train_scores, axis=1)
+    test_scores_mean = np.mean(test_scores, axis=1)
+    test_scores_std = np.std(test_scores, axis=1)
+    plt.grid()
+
+    plt.fill_between(train_sizes, train_scores_mean - train_scores_std,
+                     train_scores_mean + train_scores_std, alpha=0.1,
+                     color="r")
+    plt.fill_between(train_sizes, test_scores_mean - test_scores_std,
+                     test_scores_mean + test_scores_std, alpha=0.1, color="g")
+    plt.plot(train_sizes, train_scores_mean, 'o-', color="r",
+             label="Training score")
+    plt.plot(train_sizes, test_scores_mean, 'o-', color="g",
+             label="Cross-validation score")
+
+    plt.legend(loc="best")
+    return plt

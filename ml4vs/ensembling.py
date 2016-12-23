@@ -22,6 +22,7 @@ from keras.constraints import maxnorm
 from keras.optimizers import SGD
 from keras import callbacks
 from keras.wrappers.scikit_learn import KerasClassifier
+from sklearn.svm import SVC
 
 from data_load import load_data, load_data_tgt
 
@@ -56,6 +57,7 @@ for train_index, test_index in sss_:
     y_train_, y_test_ = y_train[train_index], y_train[test_index]
 
 # Fit algos on train_
+
 
 # Function that transforms some features
 def log_axis(X_, names=None):
@@ -112,14 +114,15 @@ pipeline_nn = Pipeline(estimators)
 # Create model for GB
 sys.path.append('/home/ilya/xgboost/xgboost/python-package/')
 import xgboost as xgb
-clf = xgb.XGBClassifier(n_estimators=112, learning_rate=0.1,
-                        max_depth=7,
+clf = xgb.XGBClassifier(n_estimators=87, learning_rate=0.111,
+                        max_depth=6,
                         min_child_weight=2,
-                        subsample=0.775,
-                        colsample_bytree=1.,
-                        colsample_bylevel=0.625,
-                        gamma=0.525,
-                        scale_pos_weight=2)
+                        subsample=0.275,
+                        colsample_bytree=0.85,
+                        colsample_bylevel=0.55,
+                        gamma=3.14,
+                        scale_pos_weight=6,
+                        max_delta_step=6)
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
@@ -166,13 +169,23 @@ estimators.append(('scaler', StandardScaler()))
 estimators.append(('clf', clf))
 pipeline_knn = Pipeline(estimators)
 
+# Model for SVM
+clf = SVC(C=37.3, class_weight={0: 1, 1: 3}, probability=True,
+          gamma=0.0126, random_state=1)
+estimators = list()
+estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
+                                      axis=0, verbose=2)))
+estimators.append(('scaler', StandardScaler()))
+estimators.append(('clf', clf))
+pipeline_svm = Pipeline(estimators)
 
 # Fit on all training data
-pipeline_lr.fit(X_train, y)
-pipeline_knn.fit(X_train, y)
-pipeline_rf.fit(X_train, y)
-pipeline_xgb.fit(X_train, y)
-pipeline_nn.fit(X_train, y, mlp__batch_size=1024, mlp__nb_epoch=200)
+pipeline_lr.fit(X, y)
+pipeline_knn.fit(X, y)
+pipeline_rf.fit(X, y)
+pipeline_xgb.fit(X, y)
+pipeline_nn.fit(X, y)
+pipeline_svm.fit(X, y)
 
 # Load blind test data
 file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics.log'
@@ -192,19 +205,23 @@ y_pred_lr = pipeline_lr.predict(X_tgt)
 y_pred_knn = pipeline_knn.predict(X_tgt)
 y_pred_xgb = pipeline_xgb.predict(X_tgt)
 y_pred_nn = pipeline_nn.predict(X_tgt)[:, 0]
+y_pred_svm = pipeline_svm.predict(X_tgt)
 # Probabilities
 y_prob_rf = pipeline_rf.predict_proba(X_tgt)[:, 1]
 y_prob_lr = pipeline_lr.predict_proba(X_tgt)[:, 1]
 y_prob_knn = pipeline_knn.predict_proba(X_tgt)[:, 1]
 y_prob_xgb = pipeline_xgb.predict_proba(X_tgt)[:, 1]
 y_prob_nn = pipeline_nn.predict_proba(X_tgt)[:, 1]
+y_prob_knn = pipeline_nn.predict_proba(X_tgt)[:, 1]
+y_prob_svm = pipeline_nn.predict_proba(X_tgt)[:, 1]
 
-# y_preds = y_pred_lr + y_pred_knn + 1.5*y_pred_xgb + 1.5*y_pred_rf + 1.5*y_pred_nn
-# y_preds = np.asarray(y_preds, dtype=float)
-# y_preds /= 5
+y_preds = (0.67*y_pred_lr + 0.68*y_pred_knn + 0.81*y_pred_xgb +
+           0.76*y_pred_rf + 0.81*y_pred_nn + 0.79*y_pred_svm) / 4.52
+y_preds = np.asarray(y_preds, dtype=float)
+# y_preds /= 6
 
-# idx = y_preds >= 3.5
-# idx_ = y_preds < 3.5
+idx = y_preds >= 0.5
+idx_ = y_preds < 0.5
 
 def rank(y_probs):
     from scipy.stats import rankdata
@@ -214,9 +231,10 @@ def rank(y_probs):
         ranks += rank
     return ranks / max(ranks)
 
-new_prob = rank([y_prob_lr, y_prob_knn, y_prob_nn, y_prob_rf, y_prob_xgb])
-idx = new_prob >= 0.98
-idx_ = new_prob < 0.98
+# new_prob = rank([y_prob_lr, y_prob_knn, y_prob_nn, y_prob_rf, y_prob_xgb,
+#                  y_pred_svm])
+# idx = new_prob >= 0.95
+# idx_ = new_prob < 0.95
 
 # idx = y_probs > 0.250
 # idx_ = y_probs < 0.250

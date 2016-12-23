@@ -2,6 +2,7 @@
 import sys
 import os
 import numpy as np
+import pprint
 from sklearn.metrics import average_precision_score
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics import f1_score
@@ -25,11 +26,11 @@ names = ['Magnitude', 'clipped_sigma', 'meaningless_1', 'meaningless_2',
          'star_ID', 'weighted_sigma', 'skew', 'kurt', 'I', 'J', 'K', 'L',
          'Npts', 'MAD', 'lag1', 'RoMS', 'rCh2', 'Isgn', 'Vp2p', 'Jclp', 'Lclp',
          'Jtim', 'Ltim', 'CSSD', 'Ex', 'inv_eta', 'E_A', 'S_B', 'NXS', 'IQR']
-# names_to_delete = ['Magnitude', 'meaningless_1', 'meaningless_2', 'star_ID',
-#                    'Npts', 'CSSD']
-names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
-                   'Npts', 'CSSD', 'clipped_sigma', 'lag1', 'L', 'Lclp', 'Jclp',
-                   'MAD', 'Ltim']
+names_to_delete = ['Magnitude', 'meaningless_1', 'meaningless_2', 'star_ID',
+                   'Npts', 'CSSD']
+# names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
+#                    'Npts', 'CSSD', 'clipped_sigma', 'lag1', 'L', 'Lclp', 'Jclp',
+#                    'MAD', 'Ltim']
 
 X, y, df, features_names, delta = load_data([file_0, file_1], names, names_to_delete)
 target = 'variable'
@@ -37,7 +38,7 @@ predictors = list(df)
 predictors.remove(target)
 dtrain = df
 
-kfold = StratifiedKFold(n_splits=4, shuffle=True, random_state=123)
+kfold = StratifiedKFold(n_splits=4, shuffle=True, random_state=1)
 
 
 def xg_f1(y, t):
@@ -48,21 +49,23 @@ def xg_f1(y, t):
 
 
 def objective(space):
-    clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=0.1,
+    print "====================="
+    pprint.pprint(space)
+    clf = xgb.XGBClassifier(n_estimators=10000, learning_rate=space['lr'],
                             max_depth=space['max_depth'],
                             min_child_weight=space['min_child_weight'],
                             subsample=space['subsample'],
                             colsample_bytree=space['colsample_bytree'],
                             colsample_bylevel=space['colsample_bylevel'],
                             gamma=space['gamma'],
-                            scale_pos_weight=space['scale_pos_weight'])
-                            # scale_pos_weight=space['scale_pos_weight'])
+                            max_delta_step=space['mds'],
+                            scale_pos_weight=space['scale_pos_weight'],
+                            seed=1)
 
     # Try using pipeline
     estimators = list()
     estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                           axis=0, verbose=2)))
-    # estimators.append(('scaler', StandardScaler()))
     estimators.append(('clf', clf))
     pipeline = Pipeline(estimators)
 
@@ -119,15 +122,15 @@ def objective(space):
 
 
 space ={
-    'max_depth': hp.choice("x_max_depth", np.arange(5, 12, 1, dtype=int)),
+    'max_depth': hp.choice("x_max_depth", np.arange(4, 12, 1, dtype=int)),
     'min_child_weight': hp.quniform('x_min_child', 1, 20, 1),
     'subsample': hp.quniform('x_subsample', 0.5, 1, 0.025),
-    'colsample_bytree': hp.quniform('x_csbtree', 0.25, 1, 0.025),
-    'colsample_bylevel': hp.quniform('x_csblevel', 0.25, 1, 0.025),
-    'gamma': hp.quniform('x_gamma', 0.0, 1, 0.025),
-    'scale_pos_weight': hp.qloguniform('x_spweight', 0, 6, 1),
-    # 'lr': hp.quniform('lr', 0.001, 0.5, 0.025)
-    # 'lr': hp.loguniform('lr', -7, -1)
+    'colsample_bytree': hp.quniform('x_csbtree', 0.5, 1, 0.025),
+    'colsample_bylevel': hp.quniform('x_csblevel', 0.5, 1, 0.025),
+    'gamma': hp.uniform('x_gamma', 0.0, 20),
+    'scale_pos_weight': hp.quniform('x_spweight', 1, 30, 2),
+    'mds': hp.choice('mds', np.arange(0, 11, dtype=int)),
+    'lr': hp.loguniform('lr', -4.7, -1.25)
 }
 
 
@@ -135,7 +138,7 @@ trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=200,
+            max_evals=300,
             trials=trials)
 
 import hyperopt
@@ -146,14 +149,16 @@ best_n = trials.attachments['ATTACH::{}::best_n'.format(trials.best_trial['tid']
 best_n = max([int(n) for n in best_n.strip().split(' ')])
 
 clf = xgb.XGBClassifier(n_estimators=int(1.25 * best_n),
-                        learning_rate=0.1,
+                        learning_rate=best_pars['lr'],
                         max_depth=best_pars['max_depth'],
                         min_child_weight=best_pars['min_child_weight'],
                         subsample=best_pars['subsample'],
                         colsample_bytree=best_pars['colsample_bytree'],
                         colsample_bylevel=best_pars['colsample_bylevel'],
                         gamma=best_pars['gamma'],
-                        scale_pos_weight=best_pars['scale_pos_weight'])
+                        scale_pos_weight=best_pars['scale_pos_weight'],
+                        max_delta_step=best_pars['mds'],
+                        seed=1)
 
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',

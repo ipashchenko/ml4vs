@@ -3,7 +3,8 @@ import os
 import numpy as np
 import hyperopt
 from sklearn import decomposition
-from sklearn.metrics import confusion_matrix
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import confusion_matrix, precision_recall_curve, f1_score
 from hyperopt import hp, fmin, tpe, STATUS_OK, Trials
 from sklearn.cross_validation import StratifiedKFold, cross_val_score
 from sklearn.model_selection import cross_val_predict
@@ -24,11 +25,11 @@ names = ['Magnitude', 'clipped_sigma', 'meaningless_1', 'meaningless_2',
          'star_ID', 'weighted_sigma', 'skew', 'kurt', 'I', 'J', 'K', 'L',
          'Npts', 'MAD', 'lag1', 'RoMS', 'rCh2', 'Isgn', 'Vp2p', 'Jclp', 'Lclp',
          'Jtim', 'Ltim', 'CSSD', 'Ex', 'inv_eta', 'E_A', 'S_B', 'NXS', 'IQR']
-# names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
-#                    'Npts', 'CSSD', 'clipped_sigma', 'lag1', 'L', 'Lclp', 'Jclp',
-#                    'MAD', 'Ltim']
 names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
-                   'Npts', 'CSSD']
+                   'Npts', 'CSSD', 'clipped_sigma', 'lag1', 'L', 'Lclp', 'Jclp',
+                   'MAD', 'Ltim']
+# names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
+#                    'Npts', 'CSSD']
 
 X, y, df, features_names, delta = load_data([file_0, file_1], names,
                                             names_to_delete)
@@ -37,7 +38,7 @@ predictors = list(df)
 predictors.remove(target)
 dtrain = df
 
-kfold = StratifiedKFold(dtrain[target], n_folds=4, shuffle=True, random_state=1)
+kfold = StratifiedKFold(y, n_folds=4, shuffle=True, random_state=1)
 
 
 def log_axis(X_, names=None):
@@ -56,11 +57,13 @@ def log_axis(X_, names=None):
 
 
 def objective(space):
-    print "C, n_pca : {}, {}".format(space['C'], space['n_pca'])
-    clf = LogisticRegression(C=space['C'], class_weight='balanced',
+    print "C, n_pca, cw : {}, {}, {}".format(space['C'], space['n_pca'],
+                                             space['cw'])
+    clf = LogisticRegression(C=space['C'], class_weight={0: 1, 1: space['cw']},
                              random_state=1, max_iter=300, n_jobs=1,
                              tol=10.**(-5))
     pca = decomposition.PCA(n_components=space['n_pca'], random_state=1)
+    # cal_clf = CalibratedClassifierCV(clf, method='sigmoid')
     # ward = FeatureAgglomeration(n_clusters=space['n_clusters'])
     estimators = list()
     estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
@@ -73,39 +76,40 @@ def objective(space):
     estimators.append(('clf', clf))
     pipeline = Pipeline(estimators)
 
-    auc = np.mean(cross_val_score(pipeline, X, y, cv=kfold, scoring='roc_auc',
-                                  verbose=1, n_jobs=4))
-    # y_preds = cross_val_predict(pipeline, X, y, cv=kfold, n_jobs=4)
-    # CMs = list()
-    # for train_idx, test_idx in kfold:
-    #     CMs.append(confusion_matrix(y[test_idx], y_preds[test_idx]))
-    # CM = np.sum(CMs, axis=0)
+    # auc = np.mean(cross_val_score(pipeline, X, y, cv=kfold, scoring='roc_auc',
+    #                               verbose=1, n_jobs=2))
+    y_preds = cross_val_predict(pipeline, X, y, cv=kfold, n_jobs=4)
+    CMs = list()
+    for train_idx, test_idx in kfold:
+        CMs.append(confusion_matrix(y[test_idx], y_preds[test_idx]))
+    CM = np.sum(CMs, axis=0)
 
-    # FN = CM[1][0]
-    # TP = CM[1][1]
-    # FP = CM[0][1]
-    # print "TP = {}".format(TP)
-    # print "FP = {}".format(FP)
-    # print "FN = {}".format(FN)
+    FN = CM[1][0]
+    TP = CM[1][1]
+    FP = CM[0][1]
+    print "TP = {}".format(TP)
+    print "FP = {}".format(FP)
+    print "FN = {}".format(FN)
 
-    # f1 = 2. * TP / (2. * TP + FP + FN)
+    f1 = 2. * TP / (2. * TP + FP + FN)
 
-    print "AUC: {}".format(auc)
+    # print "AUC: {}".format(auc)
+    print "F1: {}".format(f1)
 
-    return{'loss': 1-auc, 'status': STATUS_OK}
+    return{'loss': 1-f1, 'status': STATUS_OK}
 
 
 space = {'C': hp.loguniform('C', -5., 4.),
-         # 'cw': hp.quniform('cw', 150, 300, 1),
+         'cw': hp.choice('cw', np.arange(1, 300, 1, dtype=int)),
          # 'n_clusters': hp.choice('n_clusters', np.arange(3, 22, 1, dtype=int))}
-         'n_pca': hp.choice('n_pca', np.arange(3, 23, 1, dtype=int))}
+         'n_pca': hp.choice('n_pca', np.arange(5, 18, 1, dtype=int))}
 
 
 trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=1000,
+            max_evals=500,
             trials=trials)
 
 print hyperopt.space_eval(space, best)
@@ -118,8 +122,10 @@ X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_dele
                                                   delta)
 
 # Fit model on all training data
-clf = LogisticRegression(C=best_pars['C'], class_weight='balanced',
+clf = LogisticRegression(C=best_pars['C'], class_weight={0: 1,
+                                                         1: best_pars['cw']},
                          random_state=1, max_iter=300, n_jobs=1, tol=10.**(-5))
+# cal_clf = CalibratedClassifierCV(clf, method='sigmoid')
 pca = decomposition.PCA(n_components=best_pars['n_pca'], random_state=1)
 # ward = FeatureAgglomeration(n_clusters=best_pars['n_clusters'])
 estimators = list()
@@ -133,12 +139,13 @@ estimators.append(('pca', pca))
 estimators.append(('clf', clf))
 pipeline = Pipeline(estimators)
 pipeline.fit(X, y)
-y_probs = pipeline.predict(X)
+# y_probs = pipeline.predict(X_tgt)
 from scipy.optimize import fmin
 from sklearn.metrics import f1_score
 # thresh = fmin(lambda x: 1-f1_score(y, y_probs > x), 0.75, xtol=10**(-6),
 #               ftol=10**(-6), maxiter=10**5)
-thresh = 1. - np.array(np.count_nonzero(y_probs), dtype=float) / np.count_nonzero(1. - y_probs)
+# thresh = 1. - np.array(np.count_nonzero(y_probs), dtype=float) / np.count_nonzero(1. - y_probs)
+thresh = 0.5
 
 # Predict classes on new data
 y_probs = pipeline.predict_proba(X_tgt)[:, 1]

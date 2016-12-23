@@ -91,7 +91,7 @@ trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=50,
+            max_evals=1000,
             trials=trials)
 
 print hyperopt.space_eval(space, best)
@@ -122,8 +122,8 @@ pipeline.fit(X, y)
 
 # Predict classes on new data
 y_probs = pipeline.predict_proba(X_tgt)[:, 1]
-idx = y_probs > 0.8
-idx_ = y_probs < 0.8
+idx = y_probs > thresh
+idx_ = y_probs < thresh
 rf_no = list(df_orig['star_ID'][idx_])
 print("Found {} variables".format(np.count_nonzero(idx)))
 

@@ -1,10 +1,11 @@
 import os
 import numpy as np
-import sys
-import matplotlib.patches as mpatches
-import matplotlib.pyplot as plt
 
+import sys
+sys.path.append('/home/ilya/code/mlxtend')
+from mlxtend.plotting import plot_learning_curves
 from sklearn import decomposition
+from sklearn.model_selection import StratifiedShuffleSplit, StratifiedKFold
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
@@ -12,38 +13,18 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer
 from sklearn.preprocessing import Imputer
 from sklearn.preprocessing import StandardScaler
-
-# NN
-from keras.models import Sequential
-from keras.layers import Dense
-from keras.layers import Dropout
-from keras.constraints import maxnorm
-from keras.optimizers import SGD
-from keras import callbacks
-from keras.wrappers.scikit_learn import KerasClassifier
 from sklearn.svm import SVC
 
 from data_load import load_data
-from plotting import plot_cv_pr
+sys.path.append('/home/ilya/xgboost/xgboost/python-package/')
+import xgboost as xgb
+from keras.constraints import maxnorm
+from keras.layers import Dense, Dropout
+from keras.models import Sequential
+from keras.optimizers import SGD
+from keras.wrappers.scikit_learn import KerasClassifier
 
 
-# Function that transforms some features
-def log_axis(X_, names=None):
-    X = X_.copy()
-    tr_names = ['clipped_sigma', 'weighted_sigma', 'RoMS', 'rCh2', 'Vp2p',
-                'Ex', 'inv_eta', 'S_B']
-    for name in tr_names:
-        try:
-            # print "Log-Transforming {}".format(name)
-            i = names.index(name)
-            X[:, i] = np.log(X[:, i])
-        except ValueError:
-            print "No {} in predictors".format(name)
-            pass
-    return X
-
-
-# Load data
 data_dir = '/home/ilya/code/ml4vs/data/LMC_SC20__corrected_list_of_variables/raw_index_values'
 file_1 = 'vast_lightcurve_statistics_variables_only.log'
 file_0 = 'vast_lightcurve_statistics_constant_only.log'
@@ -62,6 +43,33 @@ target = 'variable'
 predictors = list(df)
 predictors.remove(target)
 
+
+# Function that transforms some features
+def log_axis(X_, names=None):
+    X = X_.copy()
+    tr_names = ['clipped_sigma', 'weighted_sigma', 'RoMS', 'rCh2', 'Vp2p',
+                'Ex', 'inv_eta', 'S_B']
+    for name in tr_names:
+        try:
+            # print "Log-Transforming {}".format(name)
+            i = names.index(name)
+            X[:, i] = np.log(X[:, i])
+        except ValueError:
+            print "No {} in predictors".format(name)
+            pass
+    return X
+
+
+clf_xgb = xgb.XGBClassifier(n_estimators=87, learning_rate=0.111,
+                            max_depth=6,
+                            min_child_weight=2,
+                            subsample=0.275,
+                            colsample_bytree=0.85,
+                            colsample_bylevel=0.55,
+                            gamma=3.14,
+                            max_delta_step=7,
+                            scale_pos_weight=6,
+                            seed=1)
 
 # Create model for NN
 def create_baseline():
@@ -84,53 +92,24 @@ def create_baseline():
     model.compile(loss='binary_crossentropy', optimizer=sgd,
                   metrics=['accuracy'])
     return model
-
-earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=50,
-                                        verbose=1, mode='auto')
-
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
 estimators.append(('scaler', StandardScaler()))
 estimators.append(('mlp', KerasClassifier(build_fn=create_baseline,
-                                          nb_epoch=200,
+                                          nb_epoch=175,
                                           batch_size=1024,
                                           verbose=2)))
-pipeline_nn = Pipeline(estimators)
+clf_nn = Pipeline(estimators)
 
 
-# Create model for GB
-sys.path.append('/home/ilya/xgboost/xgboost/python-package/')
-import xgboost as xgb
-clf = xgb.XGBClassifier(n_estimators=85, learning_rate=0.111,
-                        max_depth=6,
-                        min_child_weight=2,
-                        subsample=0.275,
-                        colsample_bytree=0.85,
-                        colsample_bylevel=0.55,
-                        gamma=3.14,
-                        scale_pos_weight=6,
-                        max_delta_step=7)
-estimators = list()
-estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
-                                      axis=0, verbose=2)))
-estimators.append(('clf', clf))
-pipeline_xgb = Pipeline(estimators)
-
-
-# Create model for RF
-clf = RandomForestClassifier(n_estimators=1200,
-                             max_depth=17,
-                             max_features=3,
-                             min_samples_split=2,
-                             min_samples_leaf=3,
-                             class_weight='balanced_subsample',
-                             verbose=1, random_state=1, n_jobs=4)
-estimators = list()
-estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
-                                      axis=0, verbose=2)))
-estimators.append(('clf', clf))
-pipeline_rf = Pipeline(estimators)
+clf_rf = RandomForestClassifier(n_estimators=1400,
+                                max_depth=16,
+                                max_features=5,
+                                min_samples_split=16,
+                                min_samples_leaf=2,
+                                class_weight={0: 1, 1: 28},
+                                verbose=1, random_state=1, n_jobs=4)
 
 
 # Create model for LR
@@ -142,55 +121,45 @@ estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
 estimators.append(('func', FunctionTransformer(log_axis, kw_args={'names':
-                                                                  predictors})))
+                                                                      predictors})))
 estimators.append(('scaler', StandardScaler()))
 estimators.append(('pca', pca))
 estimators.append(('clf', clf))
-pipeline_lr = Pipeline(estimators)
+clf_lr = Pipeline(estimators)
 
 
-# Create model for SVM
-clf = SVC(C=37.286, class_weight={0: 1, 1: 3}, probability=True,
-          gamma=0.01258, random_state=1)
-estimators = list()
-estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
-                                      axis=0, verbose=2)))
-estimators.append(('scaler', StandardScaler()))
-estimators.append(('clf', clf))
-pipeline_svm = Pipeline(estimators)
-
-
-# Create model for KNN
+# Model for kNN
 clf = KNeighborsClassifier(n_neighbors=6,
-                           weights='distance', n_jobs=2)
+                           weights='distance', n_jobs=4)
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
 estimators.append(('scaler', StandardScaler()))
 estimators.append(('clf', clf))
-pipeline_knn = Pipeline(estimators)
+clf_knn = Pipeline(estimators)
 
 
-fig = None
-colors_dict = {pipeline_lr: 'lime', pipeline_rf: 'blue',
-               pipeline_xgb: 'black', pipeline_nn: 'red',
-               pipeline_knn: 'orange', pipeline_svm: 'magenta'}
-labels_dict = {pipeline_rf: 'RF', pipeline_nn: 'NN', pipeline_xgb: 'GB',
-            pipeline_lr: 'LR', pipeline_knn: 'kNN', pipeline_svm: 'SVM'}
-pipelines = [pipeline_lr, pipeline_rf, pipeline_xgb, pipeline_nn, pipeline_knn,
-             pipeline_svm]
-
-for i, pipeline in enumerate(pipelines):
-
-    fig = plot_cv_pr(pipeline, X, y, seeds=range(1, 97, 8),
-                     plot_color=colors_dict[pipeline],
-                     fig=fig, label=labels_dict[pipeline])
-
-patches = list()
-for pipeline in pipelines:
-    patches.append(mpatches.Patch(color=colors_dict[pipeline],
-                                  label=labels_dict[pipeline]))
-plt.legend(handles=patches, loc="lower left")
-plt.show()
+# Model for SVM
+clf = SVC(C=37.3, class_weight={0: 1, 1: 3}, probability=False,
+          gamma=0.0126, random_state=1)
+estimators = list()
+estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
+                                      axis=0, verbose=2)))
+estimators.append(('scaler', StandardScaler()))
+estimators.append(('clf', clf))
+clf_svm = Pipeline(estimators)
 
 
+# sss = StratifiedShuffleSplit(n_splits=4, test_size=0.25, random_state=1)
+# errors_full = list()
+# for train_index, test_index in sss.split(X, y):
+#     X_train, X_test = X[train_index], X[test_index]
+#     y_train, y_test = y[train_index], y[test_index]
+#     errors = plot_learning_curves(X_train, y_train, X_test, y_test, clf_lr,
+#                                   scoring='f1', print_model=False)
+#     errors_full.append(errors)
+
+
+cv = StratifiedShuffleSplit(n_splits=20, test_size=0.25, random_state=0)
+from plotting import plot_learning_curve
+plot_learning_curve(clf_xgb, 'SGB', X, y, cv=cv, n_jobs=4, scoring='f1')
