@@ -1,20 +1,18 @@
 # -*- coding: utf-8 -*-
 import sys
+sys.path.append('/home/ilya/github/xgboost/python-package/')
+import xgboost as xgb
 import pprint
 import os
 import numpy as np
 from sklearn.metrics import f1_score
-sys.path.append('/home/ilya/xgboost/xgboost/python-package/')
-import xgboost as xgb
 from hyperopt import hp, fmin, tpe, STATUS_OK, Trials
 from sklearn.cross_validation import StratifiedKFold
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import Imputer
-from data_load import load_data, load_data_tgt
+from data_load import load_data
 
 
 # Load data
-data_dir = '/home/ilya/code/ml4vs/data/Kr/raw_index_values'
+data_dir = '/home/ilya/github/ml4vs/data/Kr/raw_index_values'
 file_1 = 'vast_lightcurve_statistics_variables_only.log'
 file_0 = 'vast_lightcurve_statistics_constant_only.log'
 file_0 = os.path.join(data_dir, file_0)
@@ -75,15 +73,15 @@ def objective(space):
     cvresult = xgb.cv(xgb_param, xgtrain,
                       num_boost_round=clf.get_params()['n_estimators'],
                       folds=kfold, feval=xg_f1,
-                      early_stopping_rounds=10, verbose_eval=True,
+                      early_stopping_rounds=20, verbose_eval=True,
                       as_pandas=False, seed=1)
 
     print "F1:", 1-cvresult['test-f1-mean'][-1]
 
-    return{'loss': cvresult['test-f1-mean'][-1], 'status': STATUS_OK ,
+    return{'loss': cvresult['test-f1-mean'][-1], 'status': STATUS_OK,
            'attachments': {'best_n': str(len(cvresult['test-f1-mean']))}}
 
-space ={
+space = {
     'max_depth': hp.choice("x_max_depth", np.arange(2, 21, 1, dtype=int)),
     'min_child_weight': hp.qloguniform('x_min_child', 0, 5, 1),
     'subsample': hp.quniform('x_subsample', 0.25, 1, 0.0125),
