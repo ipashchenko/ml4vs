@@ -42,7 +42,7 @@ kfold = StratifiedKFold(y, n_folds=4, shuffle=True, random_state=1)
 def objective(space):
     pprint.pprint(space)
     clf = KNeighborsClassifier(n_neighbors=space['n_neighbors'],
-                               weights='distance', n_jobs=2)
+                               weights='distance', n_jobs=1)
     estimators = list()
     estimators.append(('imputer', Imputer(missing_values='NaN',
                                           strategy='median',
@@ -51,7 +51,7 @@ def objective(space):
     estimators.append(('clf', clf))
     pipeline = Pipeline(estimators)
 
-    y_preds = cross_val_predict(pipeline, X, y, cv=kfold, n_jobs=4)
+    y_preds = cross_val_predict(pipeline, X, y, cv=kfold, n_jobs=1)
     CMs = list()
     for train_idx, test_idx in kfold:
         CMs.append(confusion_matrix(y[test_idx], y_preds[test_idx]))
@@ -77,7 +77,7 @@ trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=200,
+            max_evals=300,
             trials=trials)
 
 pprint.pprint(hyperopt.space_eval(space, best))
