@@ -3,6 +3,7 @@ import copy
 
 import keras
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.calibration import calibration_curve
 from sklearn.model_selection import learning_curve
@@ -80,6 +81,18 @@ def plot_importance(est, names):
     ax.set_xlabel('Relative importance')
     fig.show()
     return fig
+
+
+def plot_importance_xgb(clf, feature_names):
+    scores_dict = clf.booster().get_fscore()
+    scores_dict_ = dict()
+    for i, feature in enumerate(feature_names):
+        scores_dict_[feature] = scores_dict['f{}'.format(i)]
+
+    feat_imp = pd.Series(scores_dict_).sort_values(ascending=False)
+    feat_imp.plot(kind='bar', title='Feature Importances')
+    plt.ylabel('Feature Importance Score')
+    plt.show()
 
 
 def plot_features_hist(X, names, bins=100):

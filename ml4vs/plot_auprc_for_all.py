@@ -3,6 +3,14 @@ import numpy as np
 import sys
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
+label_size = 16
+import matplotlib
+matplotlib.rcParams['xtick.labelsize'] = label_size
+matplotlib.rcParams['ytick.labelsize'] = label_size
+matplotlib.rcParams['axes.titlesize'] = label_size
+matplotlib.rcParams['axes.labelsize'] = label_size
+matplotlib.rcParams['font.size'] = 16
+matplotlib.rcParams['legend.fontsize'] = 16
 
 from sklearn import decomposition
 from sklearn.ensemble import RandomForestClassifier
@@ -76,9 +84,9 @@ def create_baseline():
     model.add(Dense(1, init='normal', activation='sigmoid'))
 
     # Compile model
-    learning_rate = 0.213
+    learning_rate = 0.217
     decay_rate = 0.001
-    momentum = 0.9
+    momentum = 0.95
     sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
               nesterov=False)
     model.compile(loss='binary_crossentropy', optimizer=sgd,
@@ -102,15 +110,15 @@ pipeline_nn = Pipeline(estimators)
 # Create model for GB
 sys.path.append('/home/ilya/xgboost/xgboost/python-package/')
 import xgboost as xgb
-clf = xgb.XGBClassifier(n_estimators=85, learning_rate=0.111,
+clf = xgb.XGBClassifier(n_estimators=85, learning_rate=0.087,
                         max_depth=6,
-                        min_child_weight=2,
-                        subsample=0.275,
-                        colsample_bytree=0.85,
-                        colsample_bylevel=0.55,
-                        gamma=3.14,
-                        scale_pos_weight=6,
-                        max_delta_step=7)
+                        min_child_weight=3,
+                        subsample=0.401,
+                        colsample_bytree=0.729,
+                        colsample_bylevel=0.863,
+                        gamma=3.387,
+                        scale_pos_weight=3.103,
+                        max_delta_step=10)
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
@@ -119,12 +127,12 @@ pipeline_xgb = Pipeline(estimators)
 
 
 # Create model for RF
-clf = RandomForestClassifier(n_estimators=1200,
-                             max_depth=17,
-                             max_features=3,
-                             min_samples_split=2,
-                             min_samples_leaf=3,
-                             class_weight='balanced_subsample',
+clf = RandomForestClassifier(n_estimators=1400,
+                             max_depth=16,
+                             max_features=5,
+                             min_samples_split=16,
+                             min_samples_leaf=2,
+                             class_weight={0:1, 1:28},
                              verbose=1, random_state=1, n_jobs=4)
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
@@ -192,5 +200,9 @@ for pipeline in pipelines:
                                   label=labels_dict[pipeline]))
 plt.legend(handles=patches, loc="lower left")
 plt.show()
+
+from biokit import Corrplot
+fig.savefig('/home/ilya/code/ml4vs/ml4vs/auprc_all.svg', format='svg', dpi=1200)
+fig.savefig('/home/ilya/code/ml4vs/ml4vs/auprc_all.eps', format='eps', dpi=1200)
 
 

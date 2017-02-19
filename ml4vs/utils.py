@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from pandas import DataFrame
+from sklearn.base import TransformerMixin
 
 
 def precision(cm):
@@ -48,5 +50,16 @@ def cm_scores(cm):
     return precision(cm), recall(cm), f1(cm)
 
 
-def metric()
+class ModelTransformer(TransformerMixin):
+
+    def __init__(self, model):
+        self.model = model
+
+    def fit(self, *args, **kwargs):
+        self.model.fit(*args, **kwargs)
+        return self
+
+    def transform(self, X, **transform_params):
+        return DataFrame(self.model.predict(X))
+
 
