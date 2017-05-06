@@ -39,6 +39,12 @@ target = 'variable'
 predictors = list(df)
 predictors.remove(target)
 dtrain = df
+from sklearn.cluster import DBSCAN
+# X = StandardScaler().fit_transform(X)
+db = DBSCAN(eps=0.35, min_samples=18).fit(X)
+labels = db.labels_
+print(len(set(labels)))
+X = np.hstack((X, labels[:, np.newaxis]))
 
 kfold = StratifiedKFold(n_splits=4, shuffle=True, random_state=1)
 

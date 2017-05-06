@@ -3,14 +3,16 @@ import os
 import hyperopt
 import pprint
 import numpy as np
-from sklearn.cross_validation import StratifiedKFold
-from sklearn.model_selection import cross_val_predict, cross_val_score
+from sklearn.model_selection import StratifiedKFold
+from sklearn.feature_selection import SelectKBest
+from sklearn.model_selection import cross_val_predict
 from sklearn.metrics import confusion_matrix
 from sklearn.neighbors import KNeighborsClassifier
 from hyperopt import hp, fmin, tpe, STATUS_OK, Trials
-from sklearn.pipeline import Pipeline
+from imblearn.pipeline import Pipeline
 from sklearn.preprocessing import Imputer
 from sklearn.preprocessing import StandardScaler
+from imblearn.over_sampling import SMOTE
 from data_load import load_data, load_data_tgt
 
 
@@ -31,7 +33,13 @@ names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
 
 X, y, df, features_names, delta = load_data([file_0, file_1], names,
                                             names_to_delete)
-kfold = StratifiedKFold(y, n_folds=4, shuffle=True, random_state=1)
+from imblearn.over_sampling import SMOTE
+ratio = 0.05
+# smote = SMOTE(ratio=ratio, kind='regular')
+# X, y = smote.fit_sample(X, y)
+
+
+kfold = StratifiedKFold(n_splits=4, shuffle=True, random_state=1)
 
 
 def objective(space):
@@ -41,7 +49,9 @@ def objective(space):
     estimators = list()
     estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                           axis=0, verbose=2)))
+    # estimators.append(('smote', SMOTE(kind='regular')))
     estimators.append(('scaler', StandardScaler()))
+    estimators.append(('anova', SelectKBest(k=space['k_best'])))
     estimators.append(('clf', clf))
     pipeline = Pipeline(estimators)
 
@@ -49,7 +59,7 @@ def objective(space):
     #                               verbose=1, n_jobs=4))
     y_preds = cross_val_predict(pipeline, X, y, cv=kfold, n_jobs=4)
     CMs = list()
-    for train_idx, test_idx in kfold:
+    for train_idx, test_idx in kfold.split(X, y):
         CMs.append(confusion_matrix(y[test_idx], y_preds[test_idx]))
     CM = np.sum(CMs, axis=0)
 
@@ -66,14 +76,15 @@ def objective(space):
     return{'loss': 1-f1, 'status': STATUS_OK}
 
 
-space = {'n_neighbors': hp.qloguniform("n_neighbors", 0, 6.55, 1)}
+space = {'n_neighbors': hp.choice("n_neighbors", (6, 6)),
+         'k_best': hp.choice('k_best', (16, 16))}
 
 
 trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=100,
+            max_evals=1,
             trials=trials)
 
 print hyperopt.space_eval(space, best)

@@ -30,15 +30,16 @@ predictors = list(df)
 predictors.remove(target)
 dtrain = df
 
-clf = xgb.XGBClassifier(n_estimators=85, learning_rate=0.087,
+clf = xgb.XGBClassifier(n_estimators=94, learning_rate=0.085,
                         max_depth=6,
-                        min_child_weight=3,
-                        subsample=0.401,
-                        colsample_bytree=0.729,
-                        colsample_bylevel=0.863,
-                        gamma=3.387,
-                        scale_pos_weight=3.103,
-                        max_delta_step=10, seed=1)
+                        min_child_weight=2.36,
+                        subsample=0.439,
+                        colsample_bytree=0.348,
+                        colsample_bylevel=0.758,
+                        gamma=4.159,
+                        scale_pos_weight=4.087,
+                        max_delta_step=2.85, reg_lambda=0.088,
+                        seed=1)
 
 # Try using pipeline
 estimators = list()

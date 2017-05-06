@@ -6,7 +6,7 @@ from sklearn.cross_validation import StratifiedKFold
 from sklearn.model_selection import cross_val_predict, cross_val_score
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics import roc_auc_score
-from sklearn.svm import SVC
+from sklearn.svm import SVC, LinearSVC
 import hyperopt
 from hyperopt import hp, fmin, tpe, STATUS_OK, Trials
 from sklearn.pipeline import Pipeline
@@ -32,6 +32,12 @@ names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
 
 X, y, df, features_names, delta = load_data([file_0, file_1], names,
                                             names_to_delete)
+from sklearn.cluster import DBSCAN
+# X = StandardScaler().fit_transform(X)
+# db = DBSCAN(eps=0.35, min_samples=18).fit(X)
+# labels = db.labels_
+# print(len(set(labels)))
+# X = np.hstack((X, labels[:, np.newaxis]))
 target = 'variable'
 predictors = list(df)
 predictors.remove(target)
@@ -40,72 +46,82 @@ dtrain = df
 kfold = StratifiedKFold(dtrain[target], n_folds=4, shuffle=True, random_state=1)
 
 
-def objective(space):
-    print "C, gamma : {}, {}".format(space['C'], space['gamma'])
-    clf = SVC(C=space['C'], class_weight='balanced', probability=False,
-              gamma=space['gamma'], random_state=1)
-    # pca = decomposition.PCA(n_components=space['n_pca'], random_state=1)
-    estimators = list()
-    estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
-                                          axis=0, verbose=2)))
-    estimators.append(('scaler', StandardScaler()))
-    # estimators.append(('pca', pca))
-    estimators.append(('clf', clf))
-    pipeline = Pipeline(estimators)
+# def objective(space):
+#     print space
+#     # if space['kernel'] == 'rbf':
+#     clf = SVC(C=space['C'], class_weight={0: 1, 1: space['cw']},
+#               probability=False, gamma=space['gamma'], random_state=1)
+#     # elif space['kernel'] == 'linear':
+#     # clf = SVC(C=space['C'], kernel='linear',
+#     #           class_weight={0: 1, 1: space['cw']},
+#     #           probability=False, random_state=1)
+#     # elif space['kernel'] == 'poly':
+#     # clf = SVC(C=space['C'], class_weight={0: 1, 1: space['cw']},
+#     #           probability=False, random_state=1, kernel='poly',
+#     #           degree=2, gamma=space['gamma'])
+#     # clf = LinearSVC(C=space['C'], class_weight={0: 1, 1: space['cw']},
+#     #                 penalty='l1', dual=False)
+#
+#
+#     # pca = decomposition.PCA(n_components=space['n_pca'], random_state=1)
+#     estimators = list()
+#     estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
+#                                           axis=0, verbose=2)))
+#     estimators.append(('scaler', StandardScaler()))
+#     # estimators.append(('pca', pca))
+#     estimators.append(('clf', clf))
+#     pipeline = Pipeline(estimators)
+#
+#     # auc = np.mean(cross_val_score(pipeline, X, y, cv=kfold, scoring='roc_auc',
+#     #                               verbose=1, n_jobs=4))
+#     y_preds = cross_val_predict(pipeline, X, y, cv=kfold, n_jobs=4)
+#     CMs = list()
+#     for train_idx, test_idx in kfold:
+#         CMs.append(confusion_matrix(y[test_idx], y_preds[test_idx]))
+#     CM = np.sum(CMs, axis=0)
+#
+#     FN = CM[1][0]
+#     TP = CM[1][1]
+#     FP = CM[0][1]
+#     print "TP = {}".format(TP)
+#     print "FP = {}".format(FP)
+#     print "FN = {}".format(FN)
+#
+#     f1 = 2. * TP / (2. * TP + FP + FN)
+#     print "F1 : ", f1
+#
+#     return{'loss': 1-f1, 'status': STATUS_OK}
+#
+# space = {'C': hp.loguniform('C', 2.3, 3.6),
+#          'gamma': hp.loguniform('gamma', -6.2, -1.6),
+#          'cw': hp.uniform('cw', 1, 6)}
+#
 
-    auc = np.mean(cross_val_score(pipeline, X, y, cv=kfold, scoring='roc_auc',
-                                  verbose=1, n_jobs=4))
-    # y_preds = cross_val_predict(pipeline, X, y, cv=kfold, n_jobs=4)
-    # CMs = list()
-    # for train_idx, test_idx in kfold:
-    #     CMs.append(confusion_matrix(y[test_idx], y_preds[test_idx]))
-    # CM = np.sum(CMs, axis=0)
+# trials = Trials()
+# best = fmin(fn=objective,
+#             space=space,
+#             algo=tpe.suggest,
+#             max_evals=200,
+#             trials=trials)
 
-    # FN = CM[1][0]
-    # TP = CM[1][1]
-    # FP = CM[0][1]
-    # print "TP = {}".format(TP)
-    # print "FP = {}".format(FP)
-    # print "FN = {}".format(FN)
+# print hyperopt.space_eval(space, best)
+# best_pars = hyperopt.space_eval(space, best)
 
-    # f1 = 2. * TP / (2. * TP + FP + FN)
-    print "AUC : ", auc
-
-    return{'loss': 1-auc, 'status': STATUS_OK}
-
-space = {'C': hp.loguniform('C', -6, 4),
-         'gamma': hp.loguniform('gamma', -6, 4)}
-
-
-trials = Trials()
-best = fmin(fn=objective,
-            space=space,
-            algo=tpe.suggest,
-            max_evals=100,
-            trials=trials)
-
-print hyperopt.space_eval(space, best)
-best_pars = hyperopt.space_eval(space, best)
+clf = SVC(C=25.053, gamma=0.0173, class_weight={0: 1, 1: 2.93},
+          probability=True)
+estimators = list()
+estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
+                                      axis=0, verbose=2)))
+estimators.append(('scaler', StandardScaler()))
+estimators.append(('clf', clf))
+pipeline = Pipeline(estimators)
+pipeline.fit(X, y)
 
 # Load blind test data
 file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics.log'
 file_tgt = os.path.join(data_dir, file_tgt)
 X_tgt, feature_names, df, df_orig = load_data_tgt(file_tgt, names, names_to_delete,
                                                   delta)
-
-# Fit model on all training data
-clf = SVC(C=best_pars['C'], class_weight='balanced', probability=True,
-          gamma=best_pars['gamma'], random_state=1)
-# pca = decomposition.PCA(n_components=best_pars['n_pca'], random_state=1)
-estimators = list()
-estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
-                                      axis=0, verbose=2)))
-estimators.append(('scaler', StandardScaler()))
-# estimators.append(('pca', pca))
-estimators.append(('clf', clf))
-pipeline = Pipeline(estimators)
-pipeline.fit(X, y)
-
 # Predict clases on new data
 y_probs = pipeline.predict_proba(X_tgt)[:, 1]
 idx = y_probs > 0.5
@@ -113,7 +129,7 @@ idx_ = y_probs < 0.5
 gb_no = list(df_orig['star_ID'][idx_])
 print("Found {} variables".format(np.count_nonzero(idx)))
 
-with open('svm_results.txt', 'w') as fo:
+with open('svm_new_results.txt', 'w') as fo:
     for line in list(df_orig['star_ID'][idx]):
         fo.write(line + '\n')
 
@@ -123,7 +139,7 @@ with open('clean_list_of_new_variables.txt', 'r') as fo:
 news = [line.strip().split(' ')[1] for line in news]
 news = set(news)
 
-with open('svm_results.txt', 'r') as fo:
+with open('svm_new_results.txt', 'r') as fo:
     gb = fo.readlines()
 gb = [line.strip().split('_')[4].split('.')[0] for line in gb]
 gb = set(gb)

@@ -27,20 +27,21 @@ def load_data(fnames, names, names_to_delete):
                                  na_values='+inf', sep=r"\s*",
                                  usecols=range(30)))
 
-    # Remove meaningless features
-    delta = list()
-    for df in dfs:
-        delta.append(df['CSSD'].min())
-    delta = np.min([d for d in delta if not np.isinf(d)])
-    print "delta = {}".format(delta)
+    # # Remove meaningless features
+    # delta = list()
+    # for df in dfs:
+    #     delta.append(df['CSSD'].min())
+    # delta = np.min([d for d in delta if not np.isinf(d)])
+    # print "delta = {}".format(delta)
+    delta = None
 
     for df in dfs:
         for name in names_to_delete:
             del df[name]
-        try:
-            shift_log_transform(df, 'CSSD', -delta + 0.1)
-        except KeyError:
-            pass
+        # try:
+        #     shift_log_transform(df, 'CSSD', -delta + 0.1)
+        # except KeyError:
+        #     pass
 
     # List of feature names
     features_names = list(dfs[0])
@@ -88,10 +89,10 @@ def load_data_tgt(fname, names, names_to_delete, delta):
 
     for name in names_to_delete:
         del df[name]
-    try:
-        shift_log_transform(df, 'CSSD', -delta + 0.1)
-    except KeyError:
-        pass
+    # try:
+    #     shift_log_transform(df, 'CSSD', -delta + 0.1)
+    # except KeyError:
+    #     pass
 
     # List of feature names
     features_names = list(df)

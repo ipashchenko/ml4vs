@@ -33,6 +33,12 @@ names_to_delete = ['meaningless_1', 'meaningless_2', 'star_ID',
 
 X, y, df, features_names, delta = load_data([file_0, file_1], names,
                                             names_to_delete)
+# from sklearn.cluster import DBSCAN
+# db = DBSCAN(eps=0.5, min_samples=5).fit(X)
+# core_samples_mask = np.zeros_like(db.labels_, dtype=bool)
+# core_samples_mask[db.core_sample_indices_] = True
+# labels = db.labels_
+# X = np.hstack((X, labels[:, np.newaxis]))
 target = 'variable'
 predictors = list(df)
 predictors.remove(target)
@@ -57,21 +63,20 @@ def log_axis(X_, names=None):
 
 
 def objective(space):
-    print "C, n_pca, cw : {}, {}, {}".format(space['C'], space['n_pca'],
-                                             space['cw'])
+    print space
     clf = LogisticRegression(C=space['C'], class_weight={0: 1, 1: space['cw']},
                              random_state=1, max_iter=300, n_jobs=1,
                              tol=10.**(-5), penalty='l2')
-    pca = decomposition.PCA(n_components=space['n_pca'], random_state=1)
+    # pca = decomposition.PCA(n_components=space['n_pca'], random_state=1)
     # cal_clf = CalibratedClassifierCV(clf, method='sigmoid')
     # ward = FeatureAgglomeration(n_clusters=space['n_clusters'])
     estimators = list()
     estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                           axis=0, verbose=2)))
-    # estimators.append(('func', FunctionTransformer(log_axis, kw_args={'names':
-    #                                                                   predictors})))
+    estimators.append(('func', FunctionTransformer(log_axis, kw_args={'names':
+                                                                      predictors})))
     estimators.append(('scaler', StandardScaler()))
-    estimators.append(('pca', pca))
+    # estimators.append(('pca', pca))
     # estimators.append(('ward', ward))
     estimators.append(('clf', clf))
     pipeline = Pipeline(estimators)
@@ -99,21 +104,24 @@ def objective(space):
     return{'loss': 1-f1, 'status': STATUS_OK}
 
 
-space = {'C': hp.loguniform('C', -5., 4.),
-         'cw': hp.choice('cw', np.arange(1, 300, 1, dtype=int)),
+space = {'C': hp.loguniform('C', 2.3, 4.3),
+         'cw': hp.uniform('cw', 1, 5)}
          # 'n_clusters': hp.choice('n_clusters', np.arange(3, 22, 1, dtype=int))}
-         'n_pca': hp.choice('n_pca', np.arange(5, 18, 1, dtype=int))}
+         # 'n_pca': hp.choice('n_pca', np.arange(5, 18, 1, dtype=int))}
 
 
 trials = Trials()
 best = fmin(fn=objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=200,
+            max_evals=300,
             trials=trials)
 
 print hyperopt.space_eval(space, best)
 best_pars = hyperopt.space_eval(space, best)
+
+
+
 
 # # Load blind test data
 # file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics.log'

@@ -75,16 +75,15 @@ predictors.remove(target)
 def create_baseline():
     model = Sequential()
     model.add(Dense(18, input_dim=18, init='normal', activation='relu',
-                    W_constraint=maxnorm(9.388)))
-    model.add(Dropout(0.04))
+                    W_constraint=maxnorm(9.038)))
     model.add(Dense(13, init='normal', activation='relu',
-                    W_constraint=maxnorm(2.72)))
+                    W_constraint=maxnorm(5.62)))
     # model.add(Activation(space['Activation']))
-    model.add(Dropout(0.09))
+    model.add(Dropout(0.17))
     model.add(Dense(1, init='normal', activation='sigmoid'))
 
     # Compile model
-    learning_rate = 0.217
+    learning_rate = 0.2
     decay_rate = 0.001
     momentum = 0.95
     sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
@@ -101,24 +100,26 @@ estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
 estimators.append(('scaler', StandardScaler()))
 estimators.append(('mlp', KerasClassifier(build_fn=create_baseline,
-                                          nb_epoch=200,
+                                          nb_epoch=100,
                                           batch_size=1024,
-                                          verbose=2)))
+                                          verbose=2,
+                                          class_weight={0: 1, 1: 2.03})))
 pipeline_nn = Pipeline(estimators)
 
 
 # Create model for GB
 sys.path.append('/home/ilya/xgboost/xgboost/python-package/')
 import xgboost as xgb
-clf = xgb.XGBClassifier(n_estimators=85, learning_rate=0.087,
+clf = xgb.XGBClassifier(n_estimators=94, learning_rate=0.085,
                         max_depth=6,
-                        min_child_weight=3,
-                        subsample=0.401,
-                        colsample_bytree=0.729,
-                        colsample_bylevel=0.863,
-                        gamma=3.387,
-                        scale_pos_weight=3.103,
-                        max_delta_step=10)
+                        min_child_weight=2.36,
+                        subsample=0.439,
+                        colsample_bytree=0.348,
+                        colsample_bylevel=0.758,
+                        gamma=4.159,
+                        scale_pos_weight=4.087,
+                        max_delta_step=2,
+                        reg_lambda=0.088)
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
@@ -142,24 +143,23 @@ pipeline_rf = Pipeline(estimators)
 
 
 # Create model for LR
-clf = LogisticRegression(C=1.29, class_weight={0: 1, 1: 2},
-                         random_state=1, max_iter=300, n_jobs=1,
-                         tol=10.**(-5))
-pca = decomposition.PCA(n_components=16, random_state=1)
+clf = LogisticRegression(C=50.78, class_weight={0: 1, 1: 2.65},
+                         random_state=1, n_jobs=1)
+# pca = decomposition.PCA(n_components=16, random_state=1)
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
-estimators.append(('func', FunctionTransformer(log_axis, kw_args={'names':
-                                                                  predictors})))
+# estimators.append(('func', FunctionTransformer(log_axis, kw_args={'names':
+#                                                                   predictors})))
 estimators.append(('scaler', StandardScaler()))
-estimators.append(('pca', pca))
+# estimators.append(('pca', pca))
 estimators.append(('clf', clf))
 pipeline_lr = Pipeline(estimators)
 
 
 # Create model for SVM
-clf = SVC(C=37.286, class_weight={0: 1, 1: 3}, probability=True,
-          gamma=0.01258, random_state=1)
+clf = SVC(C=25.053, class_weight={0: 1, 1: 2.93}, probability=True,
+          gamma=0.0173, random_state=1)
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
@@ -183,7 +183,7 @@ fig = None
 colors_dict = {pipeline_lr: 'lime', pipeline_rf: 'blue',
                pipeline_xgb: 'black', pipeline_nn: 'red',
                pipeline_knn: 'orange', pipeline_svm: 'magenta'}
-labels_dict = {pipeline_rf: 'RF', pipeline_nn: 'NN', pipeline_xgb: 'GB',
+labels_dict = {pipeline_rf: 'RF', pipeline_nn: 'NN', pipeline_xgb: 'SGB',
             pipeline_lr: 'LR', pipeline_knn: 'kNN', pipeline_svm: 'SVM'}
 pipelines = [pipeline_lr, pipeline_rf, pipeline_xgb, pipeline_nn, pipeline_knn,
              pipeline_svm]
@@ -201,8 +201,8 @@ for pipeline in pipelines:
 plt.legend(handles=patches, loc="lower left")
 plt.show()
 
-from biokit import Corrplot
-fig.savefig('/home/ilya/code/ml4vs/ml4vs/auprc_all.svg', format='svg', dpi=1200)
-fig.savefig('/home/ilya/code/ml4vs/ml4vs/auprc_all.eps', format='eps', dpi=1200)
-
-
+import os
+path = '/home/ilya/Dropbox/papers/mlvs/new_pics/'
+fig.savefig(os.path.join(path, 'auprc_all_update2.svg'), format='svg', dpi=1200)
+fig.savefig(os.path.join(path, 'auprc_all_update2.pdf'), format='pdf', dpi=1200)
+fig.savefig(os.path.join(path, 'auprc_all_update2.eps'), format='eps', dpi=1200)

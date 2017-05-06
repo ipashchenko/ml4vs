@@ -37,7 +37,7 @@ dtrain = df
 
 
 # Use it to find nb_epochs
-sss = StratifiedShuffleSplit(y, n_iter=1, test_size=0.25, random_state=123)
+sss = StratifiedShuffleSplit(y, n_iter=1, test_size=0.25, random_state=1)
 for train_index, test_index in sss:
     X_train, X_test = X[train_index], X[test_index]
     y_train, y_test = y[train_index], y[test_index]
@@ -48,25 +48,25 @@ transforms.append(('scaler', StandardScaler()))
 pipeline = Pipeline(transforms)
 for name, transform in pipeline.steps:
     transform.fit(X_train)
-    X_test = transform.transform(X_test)
-    X_train = transform.transform(X_train)
+    X_test_ = transform.transform(X_test)
+    X_train_ = transform.transform(X_train)
 
 
 def create_baseline():
     model = Sequential()
     model.add(Dense(18, input_dim=18, init='normal', activation='relu',
-                    W_constraint=maxnorm(9.388)))
-    model.add(Dropout(0.04))
+                    W_constraint=maxnorm(9.04)))
+    model.add(Dropout(0.00063))
     model.add(Dense(13, init='normal', activation='relu',
-                    W_constraint=maxnorm(2.72)))
+                    W_constraint=maxnorm(5.62)))
     # model.add(Activation(space['Activation']))
-    model.add(Dropout(0.09))
+    model.add(Dropout(0.17))
     model.add(Dense(1, init='normal', activation='sigmoid'))
 
     # Compile model
-    learning_rate = 0.213
+    learning_rate = 0.2
     decay_rate = 0.001
-    momentum = 0.9
+    momentum = 0.95
     sgd = SGD(lr=learning_rate, decay=decay_rate, momentum=momentum,
               nesterov=False)
     model.compile(loss='binary_crossentropy', optimizer=sgd,
@@ -81,40 +81,50 @@ estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
                                       axis=0, verbose=2)))
 estimators.append(('scaler', StandardScaler()))
 estimators.append(('mlp', KerasClassifier(build_fn=create_baseline,
-                                          nb_epoch=150,
+                                          nb_epoch=60,
                                           batch_size=1024,
-                                          verbose=2)))
+                                          verbose=2,
+                                          class_weight={0: 1, 1: 2.03})))
 pipeline = Pipeline(estimators)
 
-# # Plot training history
-# history = keras.callbacks.History()
-# X_test_ = X_test.copy()
-# X_train_ = X_train.copy()
-# pipeline.fit(X_train, y_train, mlp__validation_data=(X_test_, y_test),
-#              mlp__batch_size=1024, mlp__nb_epoch=150,
-#              mlp__callbacks=[history], mlp__verbose=2)
+# Plot training history
+history = keras.callbacks.History()
+pipeline.fit(X_train, y_train, mlp__validation_data=(X_test_, y_test),
+             mlp__batch_size=1024, mlp__nb_epoch=60,
+             mlp__callbacks=[history], mlp__verbose=2,
+             mlp__class_weight={0: 1, 1: 2.03})
 
-# import matplotlib.pyplot as plt
-# plt.figure()
-# plt.plot(history.history['acc'])
-# plt.plot(history.history['val_acc'])
-# plt.title('model accuracy')
-# plt.ylabel('accuracy')
-# plt.xlabel('epoch')
-# plt.legend(['train', 'test'], loc='upper left')
-# plt.show()
-# # summarize history for loss
-# plt.figure()
-# plt.plot(history.history['loss'])
-# plt.plot(history.history['val_loss'])
-# plt.title('model loss')
-# plt.ylabel('loss')
-# plt.xlabel('epoch')
-# plt.legend(['train', 'test'], loc='upper left')
-# plt.show()
+import matplotlib.pyplot as plt
+plt.figure()
+plt.plot(history.history['acc'])
+plt.plot(history.history['val_acc'])
+plt.title('model accuracy')
+plt.ylabel('accuracy')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+# summarize history for loss
+plt.figure()
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('model loss')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
 
 # Fit on all training data
-pipeline.fit(X, y, mlp__batch_size=1024, mlp__nb_epoch=150)
+estimators = list()
+estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',
+                                      axis=0, verbose=2)))
+estimators.append(('scaler', StandardScaler()))
+estimators.append(('mlp', KerasClassifier(build_fn=create_baseline,
+                                          nb_epoch=60,
+                                          batch_size=1024,
+                                          verbose=2,
+                                          class_weight={0: 1, 1: 2.03})))
+pipeline.fit(X, y, mlp__batch_size=1024, mlp__nb_epoch=60,
+             mlp__class_weight={0: 1, 1: 2.03})
 
 # Load blind test data
 file_tgt = 'LMC_SC19_PSF_Pgood98__vast_lightcurve_statistics.log'
@@ -136,7 +146,7 @@ idx_ = y_probs < 0.50
 nn_no = list(df_orig['star_ID'][idx_])
 print("Found {} variables".format(np.count_nonzero(idx)))
 
-with open('nn_results_final.txt', 'w') as fo:
+with open('nn_new_results_final.txt', 'w') as fo:
     for line in list(df_orig['star_ID'][idx]):
         fo.write(line + '\n')
 
@@ -146,7 +156,7 @@ with open('clean_list_of_new_variables.txt', 'r') as fo:
 news = [line.strip().split(' ')[1] for line in news]
 news = set(news)
 
-with open('nn_results_final.txt', 'r') as fo:
+with open('NN_NEW_results_final.txt', 'r') as fo:
     nn = fo.readlines()
 nn = [line.strip().split('_')[4].split('.')[0] for line in nn]
 nn = set(nn)

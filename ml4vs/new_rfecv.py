@@ -64,7 +64,7 @@ class LogTransform(TransformerMixin):
                 pass
         return X_
 
-clf = LogisticRegression(C=2.34, class_weight={0: 1, 1: 1.76}, random_state=1,
+clf = LogisticRegression(C=10.5, class_weight={0: 1, 1: 1.585}, random_state=1,
                          penalty='l2')
 estimators = list()
 estimators.append(('imputer', Imputer(missing_values='NaN', strategy='median',

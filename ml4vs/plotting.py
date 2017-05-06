@@ -4,9 +4,15 @@ import copy
 import keras
 import numpy as np
 import pandas as pd
+import matplotlib
 import matplotlib.pyplot as plt
 from sklearn.calibration import calibration_curve
 from sklearn.model_selection import learning_curve
+
+
+def plot_corr_biokit(X):
+    from biokit.viz import Corrplot
+    Corrplot()
 
 
 def plot_corr(df, size=10):
@@ -369,7 +375,7 @@ def best_f1_thresholds(clf, X, y, n_cv=4, seed=1, fit_params=None):
 
 def plot_learning_curve(estimator, title, X, y, ylim=None, cv=None,
                         n_jobs=1, train_sizes=np.linspace(.1, 1.0, 5),
-                        scoring=None):
+                        scoring=None, return_scores=False):
     """
     Generate a simple plot of the test and training learning curve.
 
@@ -410,12 +416,19 @@ def plot_learning_curve(estimator, title, X, y, ylim=None, cv=None,
     n_jobs : integer, optional
         Number of jobs to run in parallel (default 1).
     """
+    label_size = 16
+    matplotlib.rcParams['xtick.labelsize'] = label_size
+    matplotlib.rcParams['ytick.labelsize'] = label_size
+    matplotlib.rcParams['axes.titlesize'] = label_size
+    matplotlib.rcParams['axes.labelsize'] = label_size
+    matplotlib.rcParams['font.size'] = label_size
+    matplotlib.rcParams['legend.fontsize'] = label_size
     plt.figure()
     plt.title(title)
     if ylim is not None:
         plt.ylim(*ylim)
-    plt.xlabel("Training examples")
-    plt.ylabel("Score")
+    plt.xlabel(r"Training sample size")
+    plt.ylabel(r"$F_1$-score")
     train_sizes, train_scores, test_scores =\
         learning_curve(estimator, X, y, cv=cv, n_jobs=n_jobs,
                        train_sizes=train_sizes, scoring=scoring)
@@ -423,17 +436,22 @@ def plot_learning_curve(estimator, title, X, y, ylim=None, cv=None,
     train_scores_std = np.std(train_scores, axis=1)
     test_scores_mean = np.mean(test_scores, axis=1)
     test_scores_std = np.std(test_scores, axis=1)
-    plt.grid()
+    # plt.grid()
 
     plt.fill_between(train_sizes, train_scores_mean - train_scores_std,
                      train_scores_mean + train_scores_std, alpha=0.1,
-                     color="r")
+                     color="gray")
     plt.fill_between(train_sizes, test_scores_mean - test_scores_std,
-                     test_scores_mean + test_scores_std, alpha=0.1, color="g")
-    plt.plot(train_sizes, train_scores_mean, 'o-', color="r",
-             label="Training score")
-    plt.plot(train_sizes, test_scores_mean, 'o-', color="g",
-             label="Cross-validation score")
+                     test_scores_mean + test_scores_std, alpha=0.1, color="gray")
+    plt.plot(train_sizes, train_scores_mean, 'o-', color="black",
+             label="Training")
+    plt.plot(train_sizes, test_scores_mean, 'o-.', color="black",
+             label="Cross-validation")
 
-    plt.legend(loc="best")
-    return plt
+    plt.legend(loc="lower right", handlelength=3)
+    fig = plt.gcf()
+    result = fig
+    if return_scores:
+        result = fig, (train_sizes, train_scores_mean, train_scores_std,
+                       test_scores_mean, test_scores_std)
+    return result
